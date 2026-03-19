@@ -145,6 +145,12 @@ ping_timeout_ms = 100
 
 ---
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup instructions, code conventions, and where the most useful work is right now.
+
+---
+
 ## License
 
 [GNU Affero General Public License v3.0](./LICENSE) — you can use, modify, and distribute this software freely, but any derivative work must also be open source under the same license.
