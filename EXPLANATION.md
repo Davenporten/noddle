@@ -164,6 +164,14 @@ Not everyone's hardware is capable of running inference layers. The client asses
 
 This means **no one is excluded**. An old laptop that can't run a single model layer still has a useful role and still earns access. Contribution looks different but the principle is the same — you give what your machine can give, you get what the network produces.
 
+### Access during downtime
+Users can turn their node off and continue using the CLI tool — the node does not need to be active for every prompt. However, **prolonged inactivity should eventually suspend access.** A node that has been offline for an extended period (e.g. one week) loses the benefit of the tool until it comes back online and resumes contributing. The exact grace period is an open design question, but the principle is clear: access is tied to ongoing participation, not a one-time install. This prevents pure consumption with no contribution and keeps the cooperative model honest.
+
+Open questions:
+- What is the right grace period? (A week seems reasonable; a day seems punishing for travel or weekends; a month seems too generous)
+- Should the grace period vary by node role? A working node that was online 20 hours a day for six months earns more slack than a node that barely contributed before going dark
+- Should the user receive a warning (e.g. "your node has been offline for 5 days — access will suspend in 2 days") before cutoff?
+
 ### Why this works
 - The incentive is intrinsic and direct — no middleman, no pricing mechanism to game or exploit
 - It mirrors how the internet itself works: not every router is a backbone node, but every router contributes to the whole
