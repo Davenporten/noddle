@@ -1,4 +1,5 @@
 mod config;
+mod config_watcher;
 mod role;
 mod services;
 mod session;
@@ -11,12 +12,13 @@ use noddle_adapter_candle::CandleAdapter;
 use noddle_core::adapter::{InferenceAdapter, StubAdapter};
 use noddle_core::manifest::ManifestRegistry;
 use noddle_proto::{
+    admin_service_server::AdminServiceServer,
     client_service_server::ClientServiceServer,
     node_service_server::NodeServiceServer,
     NodeCapability, NodeAddress, NodeRole,
 };
 use noddle_registry::registry::Registry;
-use services::{ClientServiceImpl, NodeServiceImpl};
+use services::{AdminServiceImpl, ClientServiceImpl, NodeServiceImpl};
 use state::NodeState;
 use std::sync::Arc;
 use tonic::transport::Server;
@@ -72,6 +74,9 @@ async fn main() -> Result<()> {
     let discovered_model_ids: Vec<String> =
         available_models.iter().map(|m| m.model_id.clone()).collect();
 
+    if !config.node.active {
+        info!("node is inactive — local CLI available but not advertising to network");
+    }
     info!(count = discovered_model_ids.len(), "weight discovery complete");
 
     // ── Inference adapter ─────────────────────────────────────────────────────
@@ -100,7 +105,7 @@ async fn main() -> Result<()> {
         let capability = NodeCapability {
             node_id:        node_id.clone(),
             address:        Some(NodeAddress { host, port }),
-            model_ids:      discovered_model_ids,
+            model_ids:      if config.node.active { discovered_model_ids.clone() } else { vec![] },
             role:           role as i32,
             current_load:   0.0,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -123,9 +128,13 @@ async fn main() -> Result<()> {
         node_id.clone(),
         role,
         registry.clone(),
-        &config,
+        config.clone(),
         adapter,
+        discovered_model_ids,
     ));
+
+    // ── Config file watcher ───────────────────────────────────────────────────
+    config_watcher::spawn_config_watcher(state.clone());
 
     // ── Background gossip ─────────────────────────────────────────────────────
     tokio::spawn(noddle_registry::gossip::run_gossip_loop(
@@ -163,6 +172,7 @@ async fn main() -> Result<()> {
         info!(path = %socket_path, "listening on Unix socket");
 
         Server::builder()
+            .add_service(AdminServiceServer::new(AdminServiceImpl { state: state.clone() }))
             .add_service(ClientServiceServer::new(ClientServiceImpl { state: state.clone() }))
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await?;

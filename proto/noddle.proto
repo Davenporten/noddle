@@ -114,6 +114,21 @@ message RegistrySyncRequest {
 }
 message RegistrySyncAck { RegistryDiff diff = 1; }
 
+// ─── Admin (local only, Unix socket) ─────────────────────────────────────────
+
+message SetActiveRequest  { bool active = 1; }
+message SetActiveResponse { bool active = 1; }  // echoes the new state
+
+message NodeStatusRequest {}
+message NodeStatusResponse {
+    string          node_id      = 1;
+    NodeRole        role         = 2;
+    bool            active       = 3;
+    float           current_load = 4;
+    repeated string model_ids    = 5;  // empty when inactive
+    optional uint64 vram_mb      = 6;
+}
+
 // ─── Services ────────────────────────────────────────────────────────────────
 
 // Exposed by every node daemon.
@@ -133,4 +148,10 @@ service NodeService {
 // Exposed by the local node for the CLI to talk to.
 service ClientService {
     rpc SubmitPrompt (PromptRequest) returns (stream TokenChunk);
+}
+
+// Local admin interface — Unix socket only, never exposed to peers.
+service AdminService {
+    rpc SetActive (SetActiveRequest)  returns (SetActiveResponse);
+    rpc GetStatus (NodeStatusRequest) returns (NodeStatusResponse);
 }

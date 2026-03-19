@@ -1,12 +1,16 @@
 use crate::state::NodeState;
 use noddle_proto::{
+    admin_service_server::AdminService,
     node_service_server::NodeService,
     client_service_server::ClientService,
     AnnounceAck, AnnounceRequest,
     CancelAck, CancelRequest,
     JobMessage,
+    NodeStatusRequest, NodeStatusResponse,
     PingRequest, PingResponse,
-    PromptRequest, RegistrySyncAck, RegistrySyncRequest, TokenChunk,
+    PromptRequest, RegistrySyncAck, RegistrySyncRequest,
+    SetActiveRequest, SetActiveResponse,
+    TokenChunk,
 };
 use std::pin::Pin;
 use std::sync::Arc;
@@ -125,6 +129,47 @@ impl NodeService for NodeServiceImpl {
             reg.upsert(cap);
         }
         Ok(Response::new(AnnounceAck { accepted: true }))
+    }
+}
+
+// ── AdminService implementation ───────────────────────────────────────────────
+
+pub struct AdminServiceImpl {
+    pub state: Arc<NodeState>,
+}
+
+#[tonic::async_trait]
+impl AdminService for AdminServiceImpl {
+    async fn set_active(
+        &self,
+        request: Request<SetActiveRequest>,
+    ) -> Result<Response<SetActiveResponse>, Status> {
+        let active = request.into_inner().active;
+        self.state
+            .set_active(active)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(SetActiveResponse { active }))
+    }
+
+    async fn get_status(
+        &self,
+        _request: Request<NodeStatusRequest>,
+    ) -> Result<Response<NodeStatusResponse>, Status> {
+        let active = self.state.is_active().await;
+        let model_ids = if active {
+            self.state.discovered_model_ids.clone()
+        } else {
+            vec![]
+        };
+        Ok(Response::new(NodeStatusResponse {
+            node_id:      self.state.node_id.clone(),
+            role:         self.state.role as i32,
+            active,
+            current_load: self.state.current_load(),
+            model_ids,
+            vram_mb:      Some(self.state.vram_mb()).filter(|&v| v > 0),
+        }))
     }
 }
 

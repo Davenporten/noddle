@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{config_path, Config};
 use crate::session::SessionStore;
 use anyhow::{bail, Result};
 use dashmap::DashSet;
@@ -12,14 +12,18 @@ use tracing::info;
 
 /// Shared state threaded through all gRPC service handlers.
 pub struct NodeState {
-    pub node_id:  String,
-    pub role:     NodeRole,
-    pub registry: SharedRegistry,
-    pub router:   Router,
-    cancelled:    Arc<DashSet<String>>,
-    backend:      Arc<RwLock<Box<dyn InferenceAdapter>>>,
-    sessions:     SessionStore,
-    load:         Arc<std::sync::atomic::AtomicU32>, // stored as u32 * 1000
+    pub node_id:           String,
+    pub role:              NodeRole,
+    pub registry:          SharedRegistry,
+    pub router:            Router,
+    cancelled:             Arc<DashSet<String>>,
+    backend:               Arc<RwLock<Box<dyn InferenceAdapter>>>,
+    sessions:              SessionStore,
+    load:                  Arc<std::sync::atomic::AtomicU32>, // stored as u32 * 1000
+    config:                Arc<RwLock<Config>>,
+    /// Model IDs discovered on disk at startup — kept so we can restore them
+    /// when transitioning from inactive → active.
+    pub discovered_model_ids: Vec<String>,
 }
 
 impl NodeState {
@@ -27,23 +31,60 @@ impl NodeState {
         node_id: String,
         role: NodeRole,
         registry: SharedRegistry,
-        config: &Config,
+        config: Config,
         adapter: Box<dyn InferenceAdapter>,
+        discovered_model_ids: Vec<String>,
     ) -> Self {
         let router_cfg = RouterConfig {
-            fan_out_width:     config.routing.fan_out_width,
-            min_accept_count:  config.routing.min_success_count,
+            fan_out_width:    config.routing.fan_out_width,
+            min_accept_count: config.routing.min_success_count,
         };
         Self {
-            router:    Router::new(registry.clone(), router_cfg),
+            router:   Router::new(registry.clone(), router_cfg),
             node_id,
             role,
             registry,
-            cancelled: Arc::new(DashSet::new()),
-            backend:   Arc::new(RwLock::new(adapter)),
-            sessions:  SessionStore::new(),
-            load:      Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cancelled:            Arc::new(DashSet::new()),
+            backend:              Arc::new(RwLock::new(adapter)),
+            sessions:             SessionStore::new(),
+            load:                 Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            config:               Arc::new(RwLock::new(config)),
+            discovered_model_ids,
         }
+    }
+
+    /// Toggle whether this node advertises itself to the network.
+    /// Writes the new value back to the config file so it survives restarts.
+    pub async fn set_active(&self, active: bool) -> Result<()> {
+        {
+            let mut cfg = self.config.write().await;
+            cfg.node.active = active;
+            cfg.save(&config_path())?;
+        }
+
+        // Update our NodeCapability in the registry so peers see the change
+        // immediately via the next gossip round.
+        let model_ids = if active { self.discovered_model_ids.clone() } else { vec![] };
+        {
+            let mut reg = self.registry.write().await;
+            if let Some(mut cap) = reg.get(&self.node_id).cloned() {
+                cap.model_ids = model_ids;
+                cap.sequence += 1;
+                cap.last_seen_ms = chrono::Utc::now().timestamp_millis();
+                reg.upsert(cap);
+            }
+        }
+
+        info!(active, "node active state updated");
+        Ok(())
+    }
+
+    pub async fn is_active(&self) -> bool {
+        self.config.read().await.node.active
+    }
+
+    pub fn vram_mb(&self) -> u64 {
+        crate::role::detect_vram_mb()
     }
 
     /// Mark a job as cancelled. In-flight handlers check this before
@@ -167,6 +208,86 @@ impl NodeState {
         }
 
         Ok(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use noddle_core::adapter::StubAdapter;
+    use noddle_proto::{NodeAddress, NodeCapability, NodeRole};
+    use noddle_registry::registry::Registry;
+
+    async fn make_state(active: bool) -> NodeState {
+        let mut cfg = Config::default();
+        cfg.node.active = active;
+
+        let registry = Registry::shared();
+
+        // Pre-populate our own capability so set_active can update it
+        registry.write().await.upsert(NodeCapability {
+            node_id:        "test-node".to_string(),
+            address:        Some(NodeAddress { host: "127.0.0.1".to_string(), port: 7900 }),
+            model_ids:      vec!["m/model".to_string()],
+            role:           NodeRole::Worker as i32,
+            current_load:   0.0,
+            client_version: "0.1.0".to_string(),
+            last_seen_ms:   1,
+            sequence:       1,
+            vram_mb:        None,
+            gpu_model:      None,
+            bandwidth_mbps: None,
+        });
+
+        NodeState::new(
+            "test-node".to_string(),
+            NodeRole::Worker,
+            registry,
+            cfg,
+            Box::new(StubAdapter::new()),
+            vec!["m/model".to_string()],
+        )
+    }
+
+    #[tokio::test]
+    async fn is_active_reflects_config() {
+        let state = make_state(true).await;
+        assert!(state.is_active().await);
+
+        let state = make_state(false).await;
+        assert!(!state.is_active().await);
+    }
+
+    #[tokio::test]
+    async fn set_active_false_clears_registry_model_ids() {
+        let state = make_state(true).await;
+        state.set_active(false).await.unwrap();
+        assert!(!state.is_active().await);
+
+        let reg = state.registry.read().await;
+        let cap = reg.get("test-node").unwrap();
+        assert!(cap.model_ids.is_empty(), "inactive node should advertise no models");
+    }
+
+    #[tokio::test]
+    async fn set_active_true_restores_registry_model_ids() {
+        let state = make_state(false).await;
+        state.set_active(true).await.unwrap();
+        assert!(state.is_active().await);
+
+        let reg = state.registry.read().await;
+        let cap = reg.get("test-node").unwrap();
+        assert_eq!(cap.model_ids, vec!["m/model"]);
+    }
+
+    #[tokio::test]
+    async fn set_active_increments_sequence() {
+        let state = make_state(true).await;
+        let seq_before = state.registry.read().await.get("test-node").unwrap().sequence;
+        state.set_active(false).await.unwrap();
+        let seq_after = state.registry.read().await.get("test-node").unwrap().sequence;
+        assert!(seq_after > seq_before, "sequence must increment for LWW propagation");
     }
 }
 

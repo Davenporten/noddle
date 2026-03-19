@@ -30,6 +30,7 @@ base64          = "0.22"
 dashmap         = { workspace = true }
 futures         = { workspace = true }
 chrono          = { workspace = true }
+notify          = { version = "6", features = ["macos_kqueue"] }
 
 [dev-dependencies]
 tempfile = "3"

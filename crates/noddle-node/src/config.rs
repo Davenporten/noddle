@@ -24,6 +24,10 @@ pub struct NodeConfig {
     pub listen_addr: String,
     /// `auto` detects role from hardware; `worker` or `admin` force it.
     pub role: RoleOverride,
+    /// Whether this node is actively contributing compute to the network.
+    /// When false, the node stays up for local CLI use and registry gossip
+    /// but does not advertise models — other nodes will not route jobs here.
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +79,7 @@ impl Default for NodeConfig {
             manifests_dir: home.join(".local/share/noddle/manifests"),
             listen_addr:   "0.0.0.0:7900".to_string(),
             role:          RoleOverride::Auto,
+            active:        true,
         }
     }
 }
@@ -154,6 +159,16 @@ mod tests {
         assert_eq!(cfg.node.listen_addr, "0.0.0.0:7900");
         assert_eq!(cfg.routing.fan_out_width, 3);
         assert!(!cfg.privacy.advertise_gpu_specs);
+        assert!(cfg.node.active, "nodes should be active by default");
+    }
+
+    #[test]
+    fn active_false_roundtrips_toml() {
+        let mut cfg = Config::default();
+        cfg.node.active = false;
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert!(!parsed.node.active);
     }
 
     #[test]
