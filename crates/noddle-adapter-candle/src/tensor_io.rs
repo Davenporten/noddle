@@ -11,10 +11,12 @@ const HIDDEN_STATE_KEY: &str = "hidden_state";
 
 /// Serialize a candle tensor to our wire format.
 pub fn to_wire(tensor: &CandleTensor) -> Result<WireTensor> {
-    let data = tensor.to_vec2::<f32>().context("converting tensor to vec2")?;
     let shape = tensor.shape().dims().to_vec();
-
-    let flat: Vec<f32> = data.into_iter().flatten().collect();
+    let flat: Vec<f32> = tensor
+        .flatten_all()
+        .context("flattening tensor")?
+        .to_vec1()
+        .context("converting tensor to vec")?;
     let bytes: Vec<u8> = flat.iter().flat_map(|f| f.to_le_bytes()).collect();
 
     // Build a minimal safetensors file manually
@@ -35,6 +37,32 @@ pub fn to_wire(tensor: &CandleTensor) -> Result<WireTensor> {
     out.extend_from_slice(&bytes);
 
     Ok(WireTensor::from_bytes(out))
+}
+
+/// Argmax over a wire-format logits tensor — returns the token ID with the highest score.
+pub fn argmax_from_wire(wire: &WireTensor) -> Result<u32> {
+    let bytes = wire.as_bytes();
+    anyhow::ensure!(bytes.len() >= 8, "wire tensor too short");
+
+    let header_len = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    let header_end = 8 + header_len;
+    anyhow::ensure!(header_end <= bytes.len(), "safetensors header out of bounds");
+
+    let header: serde_json::Value =
+        serde_json::from_slice(&bytes[8..header_end]).context("parsing safetensors header")?;
+    let entry = header.get(HIDDEN_STATE_KEY).context("missing hidden_state key")?;
+    let offsets = entry["data_offsets"].as_array().context("data_offsets not array")?;
+    let start = offsets[0].as_u64().unwrap_or(0) as usize;
+    let end   = offsets[1].as_u64().unwrap_or(0) as usize;
+    let data  = &bytes[header_end + start..header_end + end];
+
+    let mut best_idx = 0u32;
+    let mut best_val = f32::NEG_INFINITY;
+    for (i, chunk) in data.chunks_exact(4).enumerate() {
+        let v = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if v > best_val { best_val = v; best_idx = i as u32; }
+    }
+    Ok(best_idx)
 }
 
 /// Deserialize a wire-format tensor back to a candle tensor.

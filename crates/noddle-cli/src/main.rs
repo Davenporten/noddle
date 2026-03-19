@@ -1,3 +1,5 @@
+mod pull;
+
 use anyhow::{bail, Context, Result};
 use noddle_proto::{client_service_client::ClientServiceClient, PromptRequest};
 use std::io::{self, BufRead, Write};
@@ -14,6 +16,17 @@ async fn main() -> Result<()> {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
+
+    // Handle management subcommands before connecting to the node.
+    if args.get(1).map(String::as_str) == Some("pull") {
+        let model_id = args.get(2)
+            .ok_or_else(|| anyhow::anyhow!("usage: noddle pull <model_id>"))?;
+        return pull::pull(model_id).await;
+    }
+    if args.get(1).map(String::as_str) == Some("models") {
+        return pull::list_available();
+    }
+
     let cli_args = parse_args(&args)?;
 
     let mut client = ClientServiceClient::new(connect().await?);
@@ -118,7 +131,7 @@ struct CliArgs {
 }
 
 fn parse_args(args: &[String]) -> Result<CliArgs> {
-    let mut model_id = "meta-llama/Llama-3-8B".to_string();
+    let mut model_id = "meta-llama/Llama-3.2-3B-Instruct".to_string();
     let mut session_id = Uuid::new_v4().to_string();
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut i = 1;

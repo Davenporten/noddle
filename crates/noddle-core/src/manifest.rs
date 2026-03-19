@@ -44,6 +44,12 @@ pub struct ModelManifest {
     pub tensor_mb_per_layer_per_512_tokens: f32,
     /// Human-readable description shown in the UI
     pub description: String,
+    /// Direct download URL for the weight file (GGUF, safetensors, etc.)
+    pub gguf_url: String,
+    // TODO: add `chat_template: Option<ChatTemplate>` here so each manifest
+    // carries its own prompt-formatting rules rather than hard-coding them in
+    // the adapter.  ChatTemplate should be an enum (Llama3Instruct, Mistral,
+    // ChatML, etc.) or a raw Jinja2 string read from the GGUF metadata.
 }
 
 /// Loaded collection of all known manifests.

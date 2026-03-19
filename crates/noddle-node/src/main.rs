@@ -89,6 +89,9 @@ async fn main() -> Result<()> {
             if let Some(manifest) = manifests.get(&first.model_id) {
                 if let Err(e) = candle.load_model(manifest, &first.weight_path) {
                     warn!(model_id = %first.model_id, err = %e, "failed to load model weights");
+                    for cause in e.chain().skip(1) {
+                        warn!("  caused by: {}", cause);
+                    }
                 } else {
                     info!(model_id = %first.model_id, "model loaded into adapter");
                 }

@@ -49,8 +49,12 @@ impl RotaryEmbedding {
         let pos_t = Tensor::new(positions.as_slice(), device)?.unsqueeze(1)?;
 
         let freqs = pos_t.broadcast_mul(&theta_t.unsqueeze(0)?)?;
-        let cos = freqs.cos()?;
-        let sin = freqs.sin()?;
+        // Duplicate to full head_dim so rotate_half can broadcast against
+        // the full [batch, heads, seq, head_dim] query/key tensors.
+        let cos_half = freqs.cos()?;
+        let sin_half = freqs.sin()?;
+        let cos = Tensor::cat(&[&cos_half, &cos_half], 1)?;
+        let sin = Tensor::cat(&[&sin_half, &sin_half], 1)?;
 
         Ok(Self { sin, cos })
     }
@@ -286,7 +290,14 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
 
     // ── Final norm + LM head ───────────────────────────────────────────────
     let final_norm = rms_norm_from_gguf(&content, &mut file, "output_norm.weight", device)?;
-    let lm_head    = qmatmul_from_gguf(&content, &mut file, "output.weight", device)?;
+    // Some models (e.g. Llama 3.2) use weight tying: the LM head is the same
+    // tensor as the token embedding.  Fall back to token_embd.weight when a
+    // dedicated output.weight is absent.
+    let lm_head = if content.tensor_infos.contains_key("output.weight") {
+        qmatmul_from_gguf(&content, &mut file, "output.weight", device)?
+    } else {
+        qmatmul_from_gguf(&content, &mut file, "token_embd.weight", device)?
+    };
 
     Ok(Transformer { config, embedding, layers, final_norm, lm_head, device: device.clone() })
 }
@@ -294,8 +305,16 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
 fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Result<TransformerConfig> {
     use candle_core::quantized::gguf_file::Value;
 
-    let get_u32 = |key: &str| -> Result<usize> {
-        match content.metadata.get(key) {
+    // The metadata key prefix matches `general.architecture` (e.g. "llama", "mistral").
+    // Fall back to the legacy "llm" prefix used by older GGUF files.
+    let arch = match content.metadata.get("general.architecture") {
+        Some(Value::String(s)) => s.as_str().to_string(),
+        _ => "llm".to_string(),
+    };
+
+    let get_u32 = |suffix: &str| -> Result<usize> {
+        let key = format!("{}.{}", arch, suffix);
+        match content.metadata.get(key.as_str()) {
             Some(Value::U32(v)) => Ok(*v as usize),
             Some(Value::I32(v)) => Ok(*v as usize),
             Some(Value::U64(v)) => Ok(*v as usize),
@@ -303,21 +322,27 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
         }
     };
 
-    let get_f32 = |key: &str| -> Result<f32> {
-        match content.metadata.get(key) {
+    let get_f32 = |suffix: &str| -> Result<f32> {
+        let key = format!("{}.{}", arch, suffix);
+        match content.metadata.get(key.as_str()) {
             Some(Value::F32(v)) => Ok(*v),
             _ => Ok(10_000.0), // default RoPE theta
         }
     };
 
     Ok(TransformerConfig {
-        hidden_dim:   get_u32("llm.embedding_length")?,
-        num_heads:    get_u32("llm.attention.head_count")?,
-        num_kv_heads: get_u32("llm.attention.head_count_kv").unwrap_or_else(|_| get_u32("llm.attention.head_count").unwrap()),
-        ffn_dim:      get_u32("llm.feed_forward_length")?,
-        total_layers: get_u32("llm.block_count")? as u32,
-        rope_theta:   get_f32("llm.rope.freq_base")?,
-        vocab_size:   get_u32("llm.vocab_size").unwrap_or_else(|_| get_u32("tokenizer.ggml.tokens").unwrap_or(32_000)),
+        hidden_dim:   get_u32("embedding_length")?,
+        num_heads:    get_u32("attention.head_count")?,
+        num_kv_heads: get_u32("attention.head_count_kv").unwrap_or_else(|_| get_u32("attention.head_count").unwrap()),
+        ffn_dim:      get_u32("feed_forward_length")?,
+        total_layers: get_u32("block_count")? as u32,
+        rope_theta:   get_f32("rope.freq_base")?,
+        vocab_size:   get_u32("vocab_size").unwrap_or_else(|_| {
+            match content.metadata.get("tokenizer.ggml.tokens") {
+                Some(Value::Array(arr)) => arr.len(),
+                _ => 32_000,
+            }
+        }),
     })
 }
 

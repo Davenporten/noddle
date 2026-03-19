@@ -53,6 +53,18 @@ pub trait InferenceAdapter: Send + Sync {
     /// Used by the router to decide layer splits without running inference.
     fn estimated_output_bytes(&self, layer_range: &Range<u32>, sequence_len: usize) -> usize;
 
+    /// EOS token ID for the currently loaded model, if known.
+    /// Generation stops when this token is produced.
+    fn eos_token_id(&self) -> Option<u32> { None }
+
+    /// Wrap a raw user prompt in the model's chat template.
+    /// Default: return as-is (base models with no instruct format).
+    /// TODO: move formatting rules into ModelManifest so adapters don't need
+    /// to know about specific model families.
+    fn apply_chat_template(&self, user_prompt: &str) -> String {
+        user_prompt.to_string()
+    }
+
     /// Whether this adapter can serve the given model.
     fn supports_model(&self, manifest: &ModelManifest) -> bool;
 }

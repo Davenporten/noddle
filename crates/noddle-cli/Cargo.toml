@@ -18,3 +18,8 @@ tokio-stream       = { workspace = true }
 uuid               = { workspace = true }
 tower              = { workspace = true }
 hyper-util         = { workspace = true }
+reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+indicatif          = "0.17"
+futures-util       = "0.3"
+noddle-core        = { workspace = true }
+serde_json         = { workspace = true }

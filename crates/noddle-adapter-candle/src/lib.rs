@@ -1,5 +1,5 @@
 mod gguf;
-mod tensor_io;
+pub mod tensor_io;
 mod tokenizer;
 mod transformer;
 

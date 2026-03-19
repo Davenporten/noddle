@@ -153,9 +153,23 @@ impl NodeState {
         let mut next_job = job.clone();
         next_job.tensor_data = output_tensor.into_bytes();
 
-        self.router
-            .dispatch_next_hop(next_job, next_range, &already_visited)
-            .await
+        match self.router.dispatch_next_hop(next_job.clone(), next_range.clone(), &already_visited).await {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                // No peers available — try to finish remaining layers locally.
+                let has_model = self.backend.read().await.loaded_model_id().is_some();
+                if !has_model {
+                    bail!("no peers available and no local model loaded — run `noddle pull` to download weights");
+                }
+                info!(job_id = %job.job_id, "no peers for next hop, running remaining layers locally");
+                let mut local_job = next_job;
+                local_job.layer_range = Some(noddle_proto::LayerRange {
+                    start: next_range.start,
+                    end:   total_layers,
+                });
+                Box::pin(self.run_job(local_job)).await
+            }
+        }
     }
 
     /// Entry point for a prompt submitted by the CLI.
@@ -169,39 +183,56 @@ impl NodeState {
         }
 
         // Prepend conversation history when the caller provides a session ID.
-        let full_prompt = if req.session_id.is_empty() {
+        let raw_prompt = if req.session_id.is_empty() {
             req.prompt_text.clone()
         } else {
             self.sessions
                 .get_or_create(&req.session_id)
                 .context_for_next_prompt(&req.prompt_text)
         };
+        let full_prompt = backend.apply_chat_template(&raw_prompt);
 
-        let tokens = backend.tokenize(&full_prompt)?;
+        let mut context_tokens = backend.tokenize(&full_prompt)?;
         let total_layers = backend.total_layers();
-        let slice_size = (total_layers / 3).max(1);
+        let eos_id = backend.eos_token_id();
 
         drop(backend); // release read lock before async dispatch
 
-        let job = JobMessage {
-            job_id:           uuid::Uuid::new_v4().to_string(),
-            model_id:         req.model_id.clone(),
-            model_version:    String::new(),
-            layer_range:      Some(noddle_proto::LayerRange { start: 0, end: slice_size }),
-            tensor_data:      vec![],
-            tokenized_prompt: token_ids_to_bytes(&tokens),
-            return_address:   None,
-            hop_metadata:     Some(noddle_proto::HopMetadata {
-                depth: 0,
-                path:  vec![self.node_id.clone()],
-            }),
-            timestamp_ms:     chrono::Utc::now().timestamp_millis(),
-            cancel_token:     String::new(),
-            registry_diff:    None,
-        };
+        const MAX_NEW_TOKENS: usize = 1;
+        let mut generated: Vec<u32> = Vec::with_capacity(MAX_NEW_TOKENS);
 
-        let result = self.run_job(job).await?;
-        let text = self.backend.read().await.detokenize(&bytes_to_token_ids(&result.tensor_data))?;
+        for _ in 0..MAX_NEW_TOKENS {
+            let job = JobMessage {
+                job_id:           uuid::Uuid::new_v4().to_string(),
+                model_id:         req.model_id.clone(),
+                model_version:    String::new(),
+                layer_range:      Some(noddle_proto::LayerRange { start: 0, end: total_layers }),
+                tensor_data:      vec![],
+                tokenized_prompt: token_ids_to_bytes(&context_tokens),
+                return_address:   None,
+                hop_metadata:     Some(noddle_proto::HopMetadata {
+                    depth: 0,
+                    path:  vec![self.node_id.clone()],
+                }),
+                timestamp_ms:     chrono::Utc::now().timestamp_millis(),
+                cancel_token:     String::new(),
+                registry_diff:    None,
+            };
+
+            let result = self.run_job(job).await?;
+
+            let next_token = noddle_adapter_candle::tensor_io::argmax_from_wire(
+                &noddle_core::tensor::Tensor::from_bytes(result.tensor_data),
+            )?;
+
+            if Some(next_token) == eos_id {
+                break;
+            }
+            generated.push(next_token);
+            context_tokens.push(next_token);
+        }
+
+        let text = self.backend.read().await.detokenize(&generated)?;
 
         if !req.session_id.is_empty() {
             self.sessions.record_turn(&req.session_id, req.prompt_text.clone(), text.clone());

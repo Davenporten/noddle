@@ -218,6 +218,8 @@ impl ClientService for ClientServiceImpl {
                     })).await;
                 }
                 Err(e) => {
+                    let chain: Vec<String> = e.chain().map(|c| c.to_string()).collect();
+                    tracing::warn!("handle_prompt error chain: {}", chain.join(" → "));
                     let _ = tx.send(Ok(TokenChunk {
                         session_id: String::new(),
                         text:       String::new(),

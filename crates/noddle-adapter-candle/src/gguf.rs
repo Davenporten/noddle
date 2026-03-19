@@ -20,9 +20,10 @@ pub struct CandleAdapter {
 }
 
 struct LoadedModel {
-    model_id:   String,
-    transformer: Transformer,
-    tokenizer:  ModelTokenizer,
+    model_id:     String,
+    transformer:  Transformer,
+    tokenizer:    ModelTokenizer,
+    eos_token_id: Option<u32>,
 }
 
 impl CandleAdapter {
@@ -66,10 +67,22 @@ impl InferenceAdapter for CandleAdapter {
         let tokenizer = ModelTokenizer::load(weight_path)
             .context("loading tokenizer")?;
 
+        // Read EOS token ID from the GGUF metadata if present.
+        let eos_token_id = {
+            use candle_core::quantized::gguf_file;
+            let mut f = std::fs::File::open(weight_path)?;
+            let content = gguf_file::Content::read(&mut f)?;
+            match content.metadata.get("tokenizer.ggml.eos_token_id") {
+                Some(gguf_file::Value::U32(v)) => Some(*v),
+                _ => None,
+            }
+        };
+
         self.model = Some(LoadedModel {
             model_id: manifest.model_id.clone(),
             transformer,
             tokenizer,
+            eos_token_id,
         });
 
         info!(model_id = %manifest.model_id, "model loaded");
@@ -141,6 +154,22 @@ impl InferenceAdapter for CandleAdapter {
         let layer_count = (layer_range.end - layer_range.start) as usize;
         // f32 = 4 bytes; shape is [seq_len, hidden_dim] per layer output
         sequence_len * hidden_dim * 4 * layer_count
+    }
+
+    fn eos_token_id(&self) -> Option<u32> {
+        self.model.as_ref().and_then(|m| m.eos_token_id)
+    }
+
+    fn apply_chat_template(&self, user_prompt: &str) -> String {
+        match self.model.as_ref().map(|m| m.model_id.as_str()) {
+            Some(id) if id.contains("Llama-3") && id.contains("Instruct") => {
+                format!(
+                    "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+                    user_prompt
+                )
+            }
+            _ => user_prompt.to_string(),
+        }
     }
 
     fn supports_model(&self, manifest: &ModelManifest) -> bool {
