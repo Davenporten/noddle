@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 const DEFAULT_GRPC: &str = "http://127.0.0.1:7900";
 
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -15,10 +16,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let cli_args = parse_args(&args)?;
 
-    let endpoint = resolve_endpoint();
-    let mut client = ClientServiceClient::connect(endpoint)
-        .await
-        .context("could not connect to noddle-node — is it running? (`noddle-node`)")?;
+    let mut client = ClientServiceClient::new(connect().await?);
 
     // A single-shot prompt was passed on the command line — run it and exit.
     if let Some(prompt) = cli_args.prompt {
@@ -154,18 +152,53 @@ fn parse_args(args: &[String]) -> Result<CliArgs> {
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
-fn resolve_endpoint() -> String {
-    let uid = std::env::var("UID")
-        .ok()
-        .and_then(|u| u.parse::<u32>().ok())
-        .unwrap_or(1000);
-
-    let socket_path = format!("/run/user/{}/noddle.sock", uid);
-
-    if std::path::Path::new(&socket_path).exists() {
-        format!("unix://{}", socket_path)
-    } else {
+/// Build a connected gRPC channel.
+///
+/// On Unix: tries the local Unix socket first (no TLS needed for local IPC),
+/// falls back to plain TCP if the socket isn't present.
+/// On Windows: connects directly over TCP.
+async fn connect() -> Result<tonic::transport::Channel> {
+    #[cfg(unix)]
+    {
+        let socket_path = local_socket_path();
+        if std::path::Path::new(&socket_path).exists() {
+            return connect_unix(socket_path).await;
+        }
         warn!("unix socket not found at {}, falling back to {}", socket_path, DEFAULT_GRPC);
-        DEFAULT_GRPC.to_string()
     }
+
+    tonic::transport::Channel::from_static(DEFAULT_GRPC)
+        .connect()
+        .await
+        .context("could not connect to noddle-node — is it running?")
+}
+
+/// Connect via a Unix domain socket (local IPC, no TLS required).
+///
+/// Platform behaviour matches `local_socket_path` in noddle-node:
+///   - Linux  — `$XDG_RUNTIME_DIR/noddle.sock`
+///   - macOS  — `/tmp/noddle.sock`
+#[cfg(unix)]
+async fn connect_unix(socket_path: String) -> Result<tonic::transport::Channel> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+
+    Endpoint::from_static("http://[::]:50051")
+        .connect_with_connector(tower::service_fn(move |_: Uri| {
+            let path = socket_path.clone();
+            async move {
+                let stream = UnixStream::connect(path).await?;
+                Ok::<_, std::io::Error>(TokioIo::new(stream))
+            }
+        }))
+        .await
+        .context("could not connect to noddle-node unix socket")
+}
+
+#[cfg(unix)]
+fn local_socket_path() -> String {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/tmp".to_string());
+    format!("{}/noddle.sock", runtime_dir)
 }

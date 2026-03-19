@@ -7,17 +7,20 @@ mod tls;
 mod weight_discovery;
 
 use anyhow::Result;
+use noddle_adapter_candle::CandleAdapter;
+use noddle_core::adapter::{InferenceAdapter, StubAdapter};
+use noddle_core::manifest::ManifestRegistry;
 use noddle_proto::{
     client_service_server::ClientServiceServer,
     node_service_server::NodeServiceServer,
-    NodeCapability, NodeAddress,
+    NodeCapability, NodeAddress, NodeRole,
 };
 use noddle_registry::registry::Registry;
 use services::{ClientServiceImpl, NodeServiceImpl};
 use state::NodeState;
 use std::sync::Arc;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[tokio::main]
@@ -53,6 +56,43 @@ async fn main() -> Result<()> {
     let node_id = load_or_create_node_id()?;
     info!(node_id = %node_id, role = ?role, "node identity established");
 
+    // ── Manifests + weight discovery ──────────────────────────────────────────
+    let manifests = ManifestRegistry::load_dir(&config.node.manifests_dir)
+        .unwrap_or_else(|e| {
+            warn!(err = %e, "failed to load manifests dir, continuing with empty registry");
+            ManifestRegistry::default()
+        });
+
+    let available_models = weight_discovery::discover(&config.node.weights_dir, &manifests)
+        .unwrap_or_else(|e| {
+            warn!(err = %e, "weight discovery failed, continuing with no models");
+            vec![]
+        });
+
+    let discovered_model_ids: Vec<String> =
+        available_models.iter().map(|m| m.model_id.clone()).collect();
+
+    info!(count = discovered_model_ids.len(), "weight discovery complete");
+
+    // ── Inference adapter ─────────────────────────────────────────────────────
+    // Workers with weights get the real candle adapter; everything else gets
+    // the stub so the node still participates in routing.
+    let adapter: Box<dyn InferenceAdapter> =
+        if role == NodeRole::Worker && !available_models.is_empty() {
+            let mut candle = CandleAdapter::new();
+            let first = &available_models[0];
+            if let Some(manifest) = manifests.get(&first.model_id) {
+                if let Err(e) = candle.load_model(manifest, &first.weight_path) {
+                    warn!(model_id = %first.model_id, err = %e, "failed to load model weights");
+                } else {
+                    info!(model_id = %first.model_id, "model loaded into adapter");
+                }
+            }
+            Box::new(candle)
+        } else {
+            Box::new(StubAdapter::new())
+        };
+
     // ── Register ourselves in the local registry ──────────────────────────────
     let listen_addr = config.node.listen_addr.clone();
     let (host, port) = parse_addr(&listen_addr)?;
@@ -60,7 +100,7 @@ async fn main() -> Result<()> {
         let capability = NodeCapability {
             node_id:        node_id.clone(),
             address:        Some(NodeAddress { host, port }),
-            model_ids:      vec![],  // populated once weights are loaded
+            model_ids:      discovered_model_ids,
             role:           role as i32,
             current_load:   0.0,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -84,6 +124,7 @@ async fn main() -> Result<()> {
         role,
         registry.clone(),
         &config,
+        adapter,
     ));
 
     // ── Background gossip ─────────────────────────────────────────────────────
@@ -92,16 +133,47 @@ async fn main() -> Result<()> {
         node_id.clone(),
     ));
 
-    // ── gRPC server ───────────────────────────────────────────────────────────
+    // ── gRPC server (TLS — peer-to-peer) ──────────────────────────────────────
     let addr = listen_addr.parse()?;
-    info!(addr = %addr, "starting gRPC server");
+    info!(addr = %addr, "starting TLS gRPC server");
 
-    Server::builder()
-        .tls_config(tls_config)?
-        .add_service(NodeServiceServer::new(NodeServiceImpl { state: state.clone() }))
-        .add_service(ClientServiceServer::new(ClientServiceImpl { state: state.clone() }))
-        .serve(addr)
-        .await?;
+    let tls_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = Server::builder()
+            .tls_config(tls_config)
+            .expect("TLS config")
+            .add_service(NodeServiceServer::new(NodeServiceImpl { state: tls_state.clone() }))
+            .add_service(ClientServiceServer::new(ClientServiceImpl { state: tls_state }))
+            .serve(addr)
+            .await
+        {
+            tracing::error!(err = %e, "TLS gRPC server error");
+        }
+    });
+
+    // ── Unix socket server (no TLS — local CLI only) ───────────────────────────
+    #[cfg(unix)]
+    {
+        use tokio::net::UnixListener;
+        use tokio_stream::wrappers::UnixListenerStream;
+
+        let socket_path = local_socket_path();
+        let _ = std::fs::remove_file(&socket_path); // clean up stale socket from previous run
+        let listener = UnixListener::bind(&socket_path)?;
+        info!(path = %socket_path, "listening on Unix socket");
+
+        Server::builder()
+            .add_service(ClientServiceServer::new(ClientServiceImpl { state: state.clone() }))
+            .serve_with_incoming(UnixListenerStream::new(listener))
+            .await?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        // On non-Unix platforms the TLS server is the only listener.
+        // The spawned task above runs indefinitely; park the main thread.
+        std::future::pending::<()>().await;
+    }
 
     Ok(())
 }
@@ -130,6 +202,20 @@ fn parse_addr(addr: &str) -> Result<(String, u32)> {
     let port = parts[0].parse::<u32>()?;
     let host = parts[1].to_string();
     Ok((host, port))
+}
+
+/// Path for the local Unix socket used by the CLI.
+///
+/// Platform behaviour:
+///   - Linux  — uses `$XDG_RUNTIME_DIR` (set by systemd/PAM, e.g. `/run/user/1000`)
+///   - macOS  — `XDG_RUNTIME_DIR` is not set by default; falls back to `/tmp`
+///   - Other Unix — same `/tmp` fallback
+///   - Windows — Unix sockets are not used; this function is never compiled on Windows
+#[cfg(unix)]
+fn local_socket_path() -> String {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/tmp".to_string());
+    format!("{}/noddle.sock", runtime_dir)
 }
 
 fn dirs_home() -> std::path::PathBuf {

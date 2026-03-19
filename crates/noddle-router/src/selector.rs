@@ -58,6 +58,75 @@ pub async fn select_candidates(
     accepted
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noddle_proto::{NodeAddress, NodeCapability};
+    use noddle_registry::registry::Registry;
+
+    fn make_node(node_id: &str, model_id: &str, load: f32, with_address: bool) -> NodeCapability {
+        NodeCapability {
+            node_id:        node_id.to_string(),
+            address:        if with_address {
+                Some(NodeAddress { host: "127.0.0.1".to_string(), port: 9999 })
+            } else {
+                None
+            },
+            model_ids:      vec![model_id.to_string()],
+            role:           1,
+            current_load:   load,
+            client_version: "0.1.0".to_string(),
+            last_seen_ms:   1,
+            sequence:       1,
+            vram_mb:        None,
+            gpu_model:      None,
+            bandwidth_mbps: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn overloaded_node_not_selected() {
+        let registry = Registry::shared();
+        registry.write().await.upsert(make_node("n1", "m/model", 0.9, true));
+        let result = select_candidates(&registry, "m/model", &HashSet::new(), 3).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wrong_model_not_selected() {
+        let registry = Registry::shared();
+        registry.write().await.upsert(make_node("n1", "other/model", 0.1, true));
+        let result = select_candidates(&registry, "m/model", &HashSet::new(), 3).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn excluded_node_not_selected() {
+        let registry = Registry::shared();
+        registry.write().await.upsert(make_node("n1", "m/model", 0.1, true));
+        let excluded: HashSet<String> = ["n1".to_string()].into();
+        let result = select_candidates(&registry, "m/model", &excluded, 3).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_without_address_not_selected() {
+        let registry = Registry::shared();
+        registry.write().await.upsert(make_node("n1", "m/model", 0.1, false));
+        let result = select_candidates(&registry, "m/model", &HashSet::new(), 3).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn at_load_threshold_not_selected() {
+        let registry = Registry::shared();
+        // exactly 0.8 — the filter is strictly less-than
+        registry.write().await.upsert(make_node("n1", "m/model", 0.8, true));
+        let result = select_candidates(&registry, "m/model", &HashSet::new(), 3).await;
+        assert!(result.is_empty());
+    }
+}
+
 async fn ping_node(node: &NodeCapability) -> Result<()> {
     let addr_info = node.address.as_ref().unwrap();
     let addr = format!("https://{}:{}", addr_info.host, addr_info.port);

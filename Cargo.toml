@@ -4,6 +4,7 @@ members = [
     "crates/noddle-core",
     "crates/noddle-registry",
     "crates/noddle-router",
+    "crates/noddle-adapter-candle",
     "crates/noddle-node",
     "crates/noddle-cli",
 ]
@@ -37,9 +38,12 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
 rand = "0.8"
 futures = "0.3"
+tower = "0.4"
+hyper-util = { version = "0.1", features = ["tokio"] }
 
 # Internal crates
-noddle-proto = { path = "crates/noddle-proto" }
-noddle-core = { path = "crates/noddle-core" }
-noddle-registry = { path = "crates/noddle-registry" }
-noddle-router = { path = "crates/noddle-router" }
+noddle-proto          = { path = "crates/noddle-proto" }
+noddle-core           = { path = "crates/noddle-core" }
+noddle-registry       = { path = "crates/noddle-registry" }
+noddle-router         = { path = "crates/noddle-router" }
+noddle-adapter-candle = { path = "crates/noddle-adapter-candle" }

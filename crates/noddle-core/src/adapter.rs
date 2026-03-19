@@ -7,13 +7,13 @@ use std::path::Path;
 /// The single abstraction boundary between the distributed routing system
 /// and any specific inference implementation.
 ///
-/// # Adding a new model backend
+/// # Adding a new model adapter
 /// 1. Implement this trait.
-/// 2. Register the implementation in the node daemon's backend selector.
+/// 2. Register the implementation in the node daemon's adapter registry.
 /// 3. Add a model manifest JSON file — no other code changes required.
-pub trait InferenceBackend: Send + Sync {
-    /// Human-readable name for logging/debug (e.g. "llama-cpp", "transformers")
-    fn backend_name(&self) -> &str;
+pub trait InferenceAdapter: Send + Sync {
+    /// Human-readable name for logging/debug (e.g. "candle", "stub")
+    fn adapter_name(&self) -> &str;
 
     /// Load model weights from disk for the given manifest.
     /// Called once at startup or on model switch.
@@ -38,7 +38,7 @@ pub trait InferenceBackend: Send + Sync {
     ///
     /// - `layer_range`: which layers to execute (start inclusive, end exclusive)
     /// - `input_tensor`: output of the previous layer range (empty on first hop —
-    ///   the backend derives embeddings from `tokenized_prompt` in that case)
+    ///   the adapter derives embeddings from `tokenized_prompt` in that case)
     /// - `tokenized_prompt`: raw token IDs needed for embedding lookup on hop 0
     ///
     /// Returns the output tensor in safetensors wire format.
@@ -53,20 +53,19 @@ pub trait InferenceBackend: Send + Sync {
     /// Used by the router to decide layer splits without running inference.
     fn estimated_output_bytes(&self, layer_range: &Range<u32>, sequence_len: usize) -> usize;
 
-    /// Whether this backend can serve the given model ID at all
-    /// (i.e. its weight format is supported).
+    /// Whether this adapter can serve the given model.
     fn supports_model(&self, manifest: &ModelManifest) -> bool;
 }
 
-/// Stub backend used in tests and when no weights are available.
+/// Stub adapter used in tests and when no weights are available.
 /// Returns minimal valid tensors. Lets the router and registry be exercised
 /// without a real inference engine.
-pub struct StubBackend {
+pub struct StubAdapter {
     model_id: Option<String>,
     total_layers: u32,
 }
 
-impl StubBackend {
+impl StubAdapter {
     pub fn new() -> Self {
         Self { model_id: None, total_layers: 0 }
     }
@@ -83,14 +82,14 @@ impl StubBackend {
     }
 }
 
-impl Default for StubBackend {
+impl Default for StubAdapter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl InferenceBackend for StubBackend {
-    fn backend_name(&self) -> &str { "stub" }
+impl InferenceAdapter for StubAdapter {
+    fn adapter_name(&self) -> &str { "stub" }
 
     fn load_model(&mut self, manifest: &ModelManifest, _weight_path: &Path) -> Result<()> {
         self.model_id = Some(manifest.model_id.clone());
@@ -110,7 +109,6 @@ impl InferenceBackend for StubBackend {
     fn total_layers(&self) -> u32 { self.total_layers }
 
     fn tokenize(&self, prompt: &str) -> Result<Vec<u32>> {
-        // Stub: one token per whitespace-separated word
         Ok(prompt.split_whitespace().enumerate().map(|(i, _)| i as u32).collect())
     }
 
@@ -154,54 +152,54 @@ mod tests {
 
     #[test]
     fn stub_starts_with_no_model() {
-        let backend = StubBackend::new();
-        assert!(backend.loaded_model_id().is_none());
-        assert_eq!(backend.total_layers(), 0);
+        let adapter = StubAdapter::new();
+        assert!(adapter.loaded_model_id().is_none());
+        assert_eq!(adapter.total_layers(), 0);
     }
 
     #[test]
     fn stub_load_model_sets_state() {
-        let mut backend = StubBackend::new();
-        backend.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
-        assert_eq!(backend.loaded_model_id(), Some("test/model"));
-        assert_eq!(backend.total_layers(), 32);
+        let mut adapter = StubAdapter::new();
+        adapter.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
+        assert_eq!(adapter.loaded_model_id(), Some("test/model"));
+        assert_eq!(adapter.total_layers(), 32);
     }
 
     #[test]
     fn stub_unload_clears_state() {
-        let mut backend = StubBackend::new();
-        backend.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
-        backend.unload_model();
-        assert!(backend.loaded_model_id().is_none());
-        assert_eq!(backend.total_layers(), 0);
+        let mut adapter = StubAdapter::new();
+        adapter.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
+        adapter.unload_model();
+        assert!(adapter.loaded_model_id().is_none());
+        assert_eq!(adapter.total_layers(), 0);
     }
 
     #[test]
     fn stub_run_layers_returns_valid_tensor() {
-        let mut backend = StubBackend::new();
-        backend.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
+        let mut adapter = StubAdapter::new();
+        adapter.load_model(&test_manifest(), Path::new("/fake/path")).unwrap();
         let input = Tensor::default();
-        let output = backend.run_layers(0..16, &input, &[1, 2, 3]).unwrap();
+        let output = adapter.run_layers(0..16, &input, &[1, 2, 3]).unwrap();
         assert!(output.validate().is_ok(), "stub output tensor should be valid safetensors");
     }
 
     #[test]
     fn stub_tokenize_returns_one_token_per_word() {
-        let backend = StubBackend::new();
-        let tokens = backend.tokenize("hello world foo").unwrap();
+        let adapter = StubAdapter::new();
+        let tokens = adapter.tokenize("hello world foo").unwrap();
         assert_eq!(tokens.len(), 3);
     }
 
     #[test]
     fn stub_tokenize_empty_string() {
-        let backend = StubBackend::new();
-        let tokens = backend.tokenize("").unwrap();
+        let adapter = StubAdapter::new();
+        let tokens = adapter.tokenize("").unwrap();
         assert!(tokens.is_empty());
     }
 
     #[test]
     fn stub_supports_any_model() {
-        let backend = StubBackend::new();
-        assert!(backend.supports_model(&test_manifest()));
+        let adapter = StubAdapter::new();
+        assert!(adapter.supports_model(&test_manifest()));
     }
 }

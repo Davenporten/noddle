@@ -138,6 +138,41 @@ impl Router {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noddle_registry::registry::Registry;
+
+    #[test]
+    fn fresh_job_is_not_duplicate() {
+        let router = Router::new(Registry::shared(), RouterConfig::default());
+        assert!(!router.is_duplicate("job-abc"));
+    }
+
+    #[test]
+    fn job_is_duplicate_after_mark_seen() {
+        let router = Router::new(Registry::shared(), RouterConfig::default());
+        router.mark_seen("job-abc");
+        assert!(router.is_duplicate("job-abc"));
+    }
+
+    #[test]
+    fn mark_seen_is_per_job_id() {
+        let router = Router::new(Registry::shared(), RouterConfig::default());
+        router.mark_seen("job-a");
+        assert!(router.is_duplicate("job-a"));
+        assert!(!router.is_duplicate("job-b"));
+    }
+
+    #[test]
+    fn mark_seen_is_idempotent() {
+        let router = Router::new(Registry::shared(), RouterConfig::default());
+        router.mark_seen("job-a");
+        router.mark_seen("job-a");
+        assert!(router.is_duplicate("job-a"));
+    }
+}
+
 async fn execute_on_node(addr: String, job: JobMessage) -> Result<JobMessage> {
     let mut client = NodeServiceClient::connect(addr).await?;
     let mut stream = client.execute_layer(job).await?.into_inner();

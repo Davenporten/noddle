@@ -1,7 +1,8 @@
 use crate::config::Config;
+use crate::session::SessionStore;
 use anyhow::{bail, Result};
 use dashmap::DashSet;
-use noddle_core::backend::{InferenceBackend, StubBackend};
+use noddle_core::adapter::InferenceAdapter;
 use noddle_proto::{JobMessage, NodeRole, PromptRequest};
 use noddle_registry::registry::SharedRegistry;
 use noddle_router::router::{Router, RouterConfig};
@@ -16,7 +17,8 @@ pub struct NodeState {
     pub registry: SharedRegistry,
     pub router:   Router,
     cancelled:    Arc<DashSet<String>>,
-    backend:      Arc<RwLock<Box<dyn InferenceBackend>>>,
+    backend:      Arc<RwLock<Box<dyn InferenceAdapter>>>,
+    sessions:     SessionStore,
     load:         Arc<std::sync::atomic::AtomicU32>, // stored as u32 * 1000
 }
 
@@ -26,6 +28,7 @@ impl NodeState {
         role: NodeRole,
         registry: SharedRegistry,
         config: &Config,
+        adapter: Box<dyn InferenceAdapter>,
     ) -> Self {
         let router_cfg = RouterConfig {
             fan_out_width:     config.routing.fan_out_width,
@@ -37,7 +40,8 @@ impl NodeState {
             role,
             registry,
             cancelled: Arc::new(DashSet::new()),
-            backend:   Arc::new(RwLock::new(Box::new(StubBackend::new()))),
+            backend:   Arc::new(RwLock::new(adapter)),
+            sessions:  SessionStore::new(),
             load:      Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
@@ -114,7 +118,8 @@ impl NodeState {
     }
 
     /// Entry point for a prompt submitted by the CLI.
-    /// Tokenizes the prompt and kicks off the first job hop.
+    /// Tokenizes the prompt (with session history prepended if a session_id is given)
+    /// and kicks off the first job hop.
     pub async fn handle_prompt(&self, req: PromptRequest) -> Result<String> {
         let backend = self.backend.read().await;
 
@@ -122,9 +127,18 @@ impl NodeState {
             bail!("no model loaded — download weights and restart the node");
         }
 
-        let tokens = backend.tokenize(&req.prompt_text)?;
+        // Prepend conversation history when the caller provides a session ID.
+        let full_prompt = if req.session_id.is_empty() {
+            req.prompt_text.clone()
+        } else {
+            self.sessions
+                .get_or_create(&req.session_id)
+                .context_for_next_prompt(&req.prompt_text)
+        };
+
+        let tokens = backend.tokenize(&full_prompt)?;
         let total_layers = backend.total_layers();
-        let slice_size = (total_layers / 3).max(1); // rough equal thirds for now
+        let slice_size = (total_layers / 3).max(1);
 
         drop(backend); // release read lock before async dispatch
 
@@ -147,6 +161,11 @@ impl NodeState {
 
         let result = self.run_job(job).await?;
         let text = self.backend.read().await.detokenize(&bytes_to_token_ids(&result.tensor_data))?;
+
+        if !req.session_id.is_empty() {
+            self.sessions.record_turn(&req.session_id, req.prompt_text.clone(), text.clone());
+        }
+
         Ok(text)
     }
 }

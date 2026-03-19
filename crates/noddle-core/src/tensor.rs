@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 /// A lightweight wrapper around raw tensor bytes in safetensors wire format.
-/// The rest of the system treats tensors as opaque blobs; only InferenceBackend
+/// The rest of the system treats tensors as opaque blobs; only InferenceAdapter
 /// implementations know their internal layout.
 #[derive(Debug, Clone, Default)]
 pub struct Tensor(pub Vec<u8>);
