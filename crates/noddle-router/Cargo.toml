@@ -1,0 +1,17 @@
+[package]
+name = "noddle-router"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+noddle-proto    = { workspace = true }
+noddle-registry = { workspace = true }
+tokio           = { workspace = true }
+tokio-stream    = { workspace = true }
+anyhow          = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+dashmap         = { workspace = true }
+uuid            = { workspace = true }
+rand            = { workspace = true }
+futures         = { workspace = true }

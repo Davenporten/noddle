@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package noddle;
+
+// ─── Primitives ──────────────────────────────────────────────────────────────
+
+message NodeAddress {
+    string host = 1;
+    uint32 port = 2;
+}
+
+message LayerRange {
+    uint32 start = 1;  // inclusive
+    uint32 end   = 2;  // exclusive
+}
+
+// ─── Node Capability & Registry ──────────────────────────────────────────────
+
+enum NodeRole {
+    NODE_ROLE_UNSPECIFIED = 0;
+    WORKER                = 1;  // can run inference layers
+    ADMIN                 = 2;  // registry relay / coordination only
+}
+
+message NodeCapability {
+    string      node_id        = 1;
+    NodeAddress address        = 2;
+    repeated string model_ids  = 3;  // manifest model IDs this node can serve
+    NodeRole    role           = 4;
+    float       current_load   = 5;  // 0.0 idle → 1.0 fully loaded
+    string      client_version = 6;
+    int64       last_seen_ms   = 7;
+    uint64      sequence       = 8;  // monotonic; LWW merge never regresses this
+
+    // Optional — nodes may omit for privacy
+    optional uint64 vram_mb        = 9;
+    optional string gpu_model      = 10;
+    optional float  bandwidth_mbps = 11;
+}
+
+message RegistryDiff {
+    repeated NodeCapability upserted       = 1;  // added or updated
+    repeated string         removed_ids    = 2;  // soft removals
+    int64                   origin_ts_ms   = 3;
+    string                  origin_node_id = 4;
+}
+
+// ─── Job Messages ─────────────────────────────────────────────────────────────
+
+message HopMetadata {
+    uint32          depth      = 1;  // how many hops from origin
+    repeated string path       = 2;  // node_ids traversed so far
+}
+
+// The core unit of work flowing through the network.
+// tensor_data carries the output of the previous layer range (safetensors bytes).
+// On the first hop tensor_data is empty; the receiving node derives embeddings
+// from tokenized_prompt itself.
+message JobMessage {
+    string      job_id            = 1;
+    string      model_id          = 2;  // must match a known manifest
+    string      model_version     = 3;
+    LayerRange  layer_range       = 4;  // layers THIS node should execute
+    bytes       tensor_data       = 5;  // input tensor (safetensors format)
+    bytes       tokenized_prompt  = 6;  // raw token IDs, model-specific encoding
+    NodeAddress return_address    = 7;  // where final output goes
+    HopMetadata hop_metadata      = 8;
+    int64       timestamp_ms      = 9;
+    string      cancel_token      = 10; // non-empty = cancel broadcast
+    RegistryDiff registry_diff    = 11; // piggybacked registry sync
+}
+
+message CancelRequest {
+    string job_id       = 1;
+    string cancel_token = 2;
+}
+
+message CancelAck {
+    bool accepted = 1;
+}
+
+// ─── Client ↔ Node ────────────────────────────────────────────────────────────
+
+message PromptRequest {
+    string session_id   = 1;
+    string model_id     = 2;
+    string prompt_text  = 3;
+    bool   private_mode = 4;  // route only through high-reputation nodes
+}
+
+message TokenChunk {
+    string session_id = 1;
+    string text       = 2;   // decoded token(s)
+    bool   done       = 3;
+    string error      = 4;   // non-empty on failure
+}
+
+// ─── Registry & Peer RPCs ─────────────────────────────────────────────────────
+
+message PingRequest  { string node_id = 1; }
+message PingResponse {
+    string node_id      = 1;
+    int64  timestamp_ms = 2;
+    float  current_load = 3;
+}
+
+message AnnounceRequest { NodeCapability capability = 1; }
+message AnnounceAck     { bool accepted = 1; }
+
+message RegistrySyncRequest {
+    string       requester_node_id = 1;
+    int64        since_ms          = 2;  // request diff since this timestamp
+    RegistryDiff diff              = 3;  // send our diff at the same time
+}
+message RegistrySyncAck { RegistryDiff diff = 1; }
+
+// ─── Services ────────────────────────────────────────────────────────────────
+
+// Exposed by every node daemon.
+service NodeService {
+    // Execute a layer range and stream result back (or forward to next hop).
+    rpc ExecuteLayer  (JobMessage)           returns (stream JobMessage);
+    // Cancel an in-flight job.
+    rpc CancelJob     (CancelRequest)        returns (CancelAck);
+    // Bidirectional registry sync.
+    rpc SyncRegistry  (RegistrySyncRequest)  returns (RegistrySyncAck);
+    // Liveness + load check.
+    rpc Ping          (PingRequest)          returns (PingResponse);
+    // New node introduces itself to the network.
+    rpc Announce      (AnnounceRequest)      returns (AnnounceAck);
+}
+
+// Exposed by the local node for the CLI to talk to.
+service ClientService {
+    rpc SubmitPrompt (PromptRequest) returns (stream TokenChunk);
+}
