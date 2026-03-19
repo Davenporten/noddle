@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Which inference backend handles this model's weight format.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum WeightFormat {
-    /// GGUF files — loaded via llama.cpp
+    /// GGUF weight files
     Gguf,
-    /// SafeTensors / HuggingFace format — loaded via Transformers backend
+    /// SafeTensors weight files
     Safetensors,
 }
 

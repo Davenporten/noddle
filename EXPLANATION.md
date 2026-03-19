@@ -41,9 +41,12 @@ Think of it as **internet infrastructure for AI** — the way TCP/IP and DNS are
 ### User Experience
 The user experience mirrors Claude Code:
 - User opens a terminal and starts the client
-- They issue a natural language prompt (e.g. "build a web app that allows users to upload and parse files")
+- The client enters an **interactive session** — the user types prompts, receives streamed responses, and continues the conversation across multiple turns without restarting
+- Conversation history is maintained per-session so the model has context from earlier in the exchange
 - The client handles the rest transparently
 - The user gets a response as if talking to a centralized service
+
+The terminal interface is the primary surface. A desktop UI exists for node management (on/off toggle, model downloads, network status) but the day-to-day interaction is the CLI. Core functionality is driven by a config file; the UI adds polish on top.
 
 ### Distributed Inference Model
 Inference is split across the network by **model layers**:

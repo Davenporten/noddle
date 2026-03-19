@@ -21,3 +21,14 @@ serde_json      = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid            = { workspace = true }
+toml            = "0.8"
+tokio-stream    = { workspace = true }
+rcgen           = "0.13"
+ring            = "0.17"
+base64          = "0.22"
+dashmap         = { workspace = true }
+futures         = { workspace = true }
+chrono          = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
