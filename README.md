@@ -1,6 +1,7 @@
 # noddle
+### Distributed AI inference: a compute collective
 
-A distributed AI inference network — a compute cooperative where users run nodes that collectively perform AI inference. No single company controls it. The people running the infrastructure are the users.
+A distributed AI inference network where users run nodes that collectively perform AI inference. No single company controls it. The people running the infrastructure are the users.
 
 Read [ARCHITECTURE.md](./ARCHITECTURE.md) for a detailed breakdown of how the system works.
 
