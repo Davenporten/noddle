@@ -198,7 +198,9 @@ impl NodeState {
 
         drop(backend); // release read lock before async dispatch
 
-        const MAX_NEW_TOKENS: usize = 1;
+        // use lower max tokens for testing
+        // const MAX_NEW_TOKENS: usize = 1;
+        const MAX_NEW_TOKENS: usize = 256;
         let mut generated: Vec<u32> = Vec::with_capacity(MAX_NEW_TOKENS);
 
         for _ in 0..MAX_NEW_TOKENS {
