@@ -40,7 +40,11 @@ fn assess_role_with_vram(override_: &RoleOverride, vram_mb: u64) -> NodeRole {
 ///
 /// Current coverage:
 ///   - NVIDIA  — `nvidia-smi` (Linux / Windows with driver installed)
-///   - AMD     — sysfs `/sys/class/drm/*/device/mem_info_vram_total` (Linux)
+///
+/// AMD GPUs are intentionally excluded: candle-core does not support ROCm, so AMD
+/// nodes cannot perform GPU-accelerated inference. They are assigned ADMIN role and
+/// used for routing/registry duties only. Re-enable `amd_vram_mb` here once ROCm
+/// support lands upstream.
 ///
 /// Not yet implemented:
 ///   - Apple Silicon — unified memory; Metal API or `system_profiler SPDisplaysDataType`
@@ -54,7 +58,6 @@ fn assess_role_with_vram(override_: &RoleOverride, vram_mb: u64) -> NodeRole {
 /// Returns 0 if no GPU is detected, causing the node to self-assign as ADMIN.
 pub fn detect_vram_mb() -> u64 {
     nvidia_vram_mb()
-        .or_else(amd_vram_mb)
         .unwrap_or(0)
 }
 

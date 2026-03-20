@@ -176,7 +176,7 @@ Every node self-assigns a role at startup based on hardware detection.
 
 **AMD GPUs**
 
-AMD nodes are detected and their VRAM is read, but inference is not GPU-accelerated. `candle-core` supports CUDA (NVIDIA) and Metal (Apple Silicon) but not ROCm. AMD nodes that meet the VRAM threshold are assigned WORKER role in the registry but run inference on CPU. This is slow (~5 min/token for a full context on CPU without KV cache) and will be addressed when ROCm support lands in candle.
+AMD nodes are assigned ADMIN role regardless of VRAM. `candle-core` does not support ROCm, so there is no GPU-accelerated inference path for AMD hardware. Assigning them WORKER role and falling back to CPU inference is not useful in practice (~5 min/token without KV cache). AMD nodes participate as routing and registry nodes only. WORKER role will be enabled for AMD once ROCm support lands in candle.
 
 **Role override**
 
@@ -424,7 +424,7 @@ Adding KV cache requires passing the cache state alongside the hidden state tens
 
 **AMD GPU**
 
-`candle-core` does not support ROCm. AMD GPU nodes run inference on CPU. Their VRAM is detected and reported, and they receive WORKER role assignments, but actual inference is CPU-bound. This will be resolved when ROCm support lands upstream.
+`candle-core` does not support ROCm. AMD nodes are assigned ADMIN role and handle routing and registry duties only. They do not participate in inference chains. This will be resolved when ROCm support lands upstream.
 
 **Greedy decoding only**
 
