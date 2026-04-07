@@ -7,6 +7,15 @@ mod state;
 mod tls;
 mod weight_discovery;
 
+const BUNDLED_MANIFESTS: &[&str] = &[
+    include_str!("../../../manifests/Qwen--Qwen2.5-7B-Instruct.json"),
+    include_str!("../../../manifests/Qwen--Qwen2.5-Coder-7B-Instruct.json"),
+    include_str!("../../../manifests/microsoft--Phi-3.5-mini-instruct.json"),
+    include_str!("../../../manifests/HuggingFaceTB--SmolLM2-1.7B-Instruct.json"),
+    include_str!("../../../manifests/microsoft--phi-4.json"),
+    include_str!("../../../manifests/meta-llama--Llama-3.2-3B-Instruct.json"),
+];
+
 use anyhow::Result;
 use noddle_adapter_candle::CandleAdapter;
 use noddle_core::adapter::{InferenceAdapter, StubAdapter};
@@ -59,11 +68,9 @@ async fn main() -> Result<()> {
     info!(node_id = %node_id, role = ?role, "node identity established");
 
     // ── Manifests + weight discovery ──────────────────────────────────────────
-    let manifests = ManifestRegistry::load_dir(&config.node.manifests_dir)
-        .unwrap_or_else(|e| {
-            warn!(err = %e, "failed to load manifests dir, continuing with empty registry");
-            ManifestRegistry::default()
-        });
+    // Start with manifests bundled into the binary, then let disk entries override.
+    let mut manifests = ManifestRegistry::from_bundled(BUNDLED_MANIFESTS);
+    manifests.merge_dir(&config.node.manifests_dir);
 
     let available_models = weight_discovery::discover(&config.node.weights_dir, &manifests)
         .unwrap_or_else(|e| {

@@ -59,6 +59,36 @@ pub struct ManifestRegistry {
 }
 
 impl ManifestRegistry {
+    /// Seed the registry from a slice of raw JSON strings (bundled via `include_str!`).
+    /// On parse failure the bad entry is skipped with a warning rather than aborting.
+    pub fn from_bundled(raws: &[&str]) -> Self {
+        let mut registry = Self::default();
+        for raw in raws {
+            match serde_json::from_str::<ModelManifest>(raw) {
+                Ok(m) => { registry.manifests.insert(m.model_id.clone(), m); }
+                Err(e) => eprintln!("warn: failed to parse bundled manifest: {}", e),
+            }
+        }
+        registry
+    }
+
+    /// Merge manifests from a directory into an existing registry.
+    /// Disk entries override bundled ones so users can customise locally.
+    pub fn merge_dir(&mut self, dir: &Path) {
+        if !dir.exists() { return; }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    match Self::load_file(&path) {
+                        Ok(m) => { self.manifests.insert(m.model_id.clone(), m); }
+                        Err(e) => eprintln!("warn: failed to load manifest {:?}: {}", path, e),
+                    }
+                }
+            }
+        }
+    }
+
     /// Load all `*.json` manifest files from a directory.
     pub fn load_dir(dir: &Path) -> Result<Self> {
         let mut registry = Self::default();
