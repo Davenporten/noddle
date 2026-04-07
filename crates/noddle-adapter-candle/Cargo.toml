@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-cuda  = ["candle-core/cuda"]
-metal = ["candle-core/metal"]
+cuda  = ["candle-core/cuda", "candle-nn/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal"]
 
 [dependencies]
 noddle-core  = { workspace = true }
@@ -15,9 +15,9 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 
 # Candle ML framework
-candle-core         = "0.8"
-candle-nn           = "0.8"
-candle-transformers = "0.8"
+candle-core         = "0.10"
+candle-nn           = "0.10"
+candle-transformers = "0.10"
 
 # Tokenizer (loaded from tokenizer.json alongside the weight file)
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
