@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 
 /// Manifests bundled with the binary — users get these automatically.
 const BUNDLED_MANIFESTS: &[&str] = &[
+    include_str!("../../../manifests/Qwen--Qwen2.5-7B-Instruct.json"),
+    include_str!("../../../manifests/Qwen--Qwen2.5-Coder-7B-Instruct.json"),
+    include_str!("../../../manifests/microsoft--Phi-3.5-mini-instruct.json"),
+    include_str!("../../../manifests/HuggingFaceTB--SmolLM2-1.7B-Instruct.json"),
+    include_str!("../../../manifests/microsoft--phi-4.json"),
     include_str!("../../../manifests/meta-llama--Llama-3.2-3B-Instruct.json"),
 ];
 

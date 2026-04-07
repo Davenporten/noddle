@@ -43,8 +43,7 @@ fn assess_role_with_vram(override_: &RoleOverride, vram_mb: u64) -> NodeRole {
 ///
 /// AMD GPUs are intentionally excluded: candle-core does not support ROCm, so AMD
 /// nodes cannot perform GPU-accelerated inference. They are assigned ADMIN role and
-/// used for routing/registry duties only. Re-enable `amd_vram_mb` here once ROCm
-/// support lands upstream.
+/// used for routing/registry duties only.
 ///
 /// Not yet implemented:
 ///   - Apple Silicon — unified memory; Metal API or `system_profiler SPDisplaysDataType`
@@ -79,20 +78,6 @@ fn nvidia_vram_mb() -> Option<u64> {
         .max()
 }
 
-/// Read AMD VRAM from sysfs. Returns the largest single-GPU value in MB.
-fn amd_vram_mb() -> Option<u64> {
-    let max_bytes = std::fs::read_dir("/sys/class/drm")
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path().join("device/mem_info_vram_total");
-            let content = std::fs::read_to_string(path).ok()?;
-            content.trim().parse::<u64>().ok()
-        })
-        .max()?;
-
-    Some(max_bytes / (1024 * 1024))
-}
 
 #[cfg(test)]
 mod tests {

@@ -162,12 +162,21 @@ impl InferenceAdapter for CandleAdapter {
 
     fn apply_chat_template(&self, user_prompt: &str) -> String {
         match self.model.as_ref().map(|m| m.model_id.as_str()) {
+            // Llama 3 Instruct
             Some(id) if id.contains("Llama-3") && id.contains("Instruct") => {
                 format!(
                     "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
                     user_prompt
                 )
             }
+            // ChatML — Qwen, Phi-3/3.5/4, SmolLM2, and most modern instruction models
+            Some(id) if id.contains("Qwen") || id.contains("Phi") || id.contains("SmolLM") => {
+                format!(
+                    "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                    user_prompt
+                )
+            }
+            // Unknown model — pass through unchanged
             _ => user_prompt.to_string(),
         }
     }

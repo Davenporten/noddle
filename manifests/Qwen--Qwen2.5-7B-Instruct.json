@@ -1,0 +1,11 @@
+{
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "model_version": "1.0",
+  "total_layers": 28,
+  "weight_format": "gguf",
+  "tokenizer": "bpe_json",
+  "min_vram_mb": 4500,
+  "tensor_mb_per_layer_per_512_tokens": 6.0,
+  "description": "Qwen 2.5 7B Instruct — ungated, Apache 2.0, 4.36GB Q4_K_M, fits in 6GB VRAM. Best quality ungated 7B model.",
+  "gguf_url": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+}

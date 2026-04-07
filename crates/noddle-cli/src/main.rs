@@ -131,7 +131,7 @@ struct CliArgs {
 }
 
 fn parse_args(args: &[String]) -> Result<CliArgs> {
-    let mut model_id = "meta-llama/Llama-3.2-3B-Instruct".to_string();
+    let mut model_id = "Qwen/Qwen2.5-7B-Instruct".to_string();
     let mut session_id = Uuid::new_v4().to_string();
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut i = 1;

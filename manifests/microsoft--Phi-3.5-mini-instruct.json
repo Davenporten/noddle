@@ -1,0 +1,11 @@
+{
+  "model_id": "microsoft/Phi-3.5-mini-instruct",
+  "model_version": "1.0",
+  "total_layers": 32,
+  "weight_format": "gguf",
+  "tokenizer": "phi3",
+  "min_vram_mb": 2500,
+  "tensor_mb_per_layer_per_512_tokens": 3.5,
+  "description": "Microsoft Phi-3.5 mini instruct — ungated, MIT license, 2.23GB Q4_K_M, fits in 3GB VRAM. Best small-footprint option.",
+  "gguf_url": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
+}

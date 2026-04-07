@@ -32,3 +32,9 @@ noddle-data/
 
 # OS artifacts
 Thumbs.db
+
+# Personal notes
+TODO.md
+
+# Claude Code local settings
+.claude/
