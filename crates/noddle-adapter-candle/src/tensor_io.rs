@@ -39,8 +39,8 @@ pub fn to_wire(tensor: &CandleTensor) -> Result<WireTensor> {
     Ok(WireTensor::from_bytes(out))
 }
 
-/// Argmax over a wire-format logits tensor — returns the token ID with the highest score.
-pub fn argmax_from_wire(wire: &WireTensor) -> Result<u32> {
+/// Sample a token from a wire-format logits tensor using temperature scaling.
+pub fn sample_from_wire(wire: &WireTensor, temperature: f32) -> Result<u32> {
     let bytes = wire.as_bytes();
     anyhow::ensure!(bytes.len() >= 8, "wire tensor too short");
 
@@ -56,13 +56,26 @@ pub fn argmax_from_wire(wire: &WireTensor) -> Result<u32> {
     let end   = offsets[1].as_u64().unwrap_or(0) as usize;
     let data  = &bytes[header_end + start..header_end + end];
 
-    let mut best_idx = 0u32;
-    let mut best_val = f32::NEG_INFINITY;
-    for (i, chunk) in data.chunks_exact(4).enumerate() {
-        let v = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        if v > best_val { best_val = v; best_idx = i as u32; }
+    let logits: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) / temperature)
+        .collect();
+
+    // Subtract max before exp for numerical stability.
+    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut probs: Vec<f32> = logits.iter().map(|l| (l - max).exp()).collect();
+    let sum: f32 = probs.iter().sum();
+    probs.iter_mut().for_each(|p| *p /= sum);
+
+    let threshold: f32 = rand::random();
+    let mut cumulative = 0.0f32;
+    for (i, p) in probs.iter().enumerate() {
+        cumulative += p;
+        if cumulative >= threshold {
+            return Ok(i as u32);
+        }
     }
-    Ok(best_idx)
+    Ok((probs.len() - 1) as u32)
 }
 
 /// Deserialize a wire-format tensor back to a candle tensor.

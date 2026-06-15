@@ -89,10 +89,11 @@ async fn send_and_stream(
 ) -> Result<()> {
     let mut stream = client
         .submit_prompt(PromptRequest {
-            session_id:  session_id.to_string(),
-            model_id:    model_id.to_string(),
-            prompt_text: prompt.to_string(),
+            session_id:   session_id.to_string(),
+            model_id:     model_id.to_string(),
+            prompt_text:  prompt.to_string(),
             private_mode: false,
+            temperature:  None,  // use node default (0.8)
         })
         .await
         .context("failed to submit prompt")?

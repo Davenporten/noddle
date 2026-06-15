@@ -10,6 +10,7 @@ metal = ["candle-core/metal", "candle-nn/metal"]
 [dependencies]
 noddle-core  = { workspace = true }
 anyhow       = { workspace = true }
+rand         = { workspace = true }
 tracing      = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }

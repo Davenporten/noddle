@@ -223,8 +223,10 @@ impl NodeState {
 
             let result = self.run_job(job).await?;
 
-            let next_token = noddle_adapter_candle::tensor_io::argmax_from_wire(
+            let temperature = req.temperature.unwrap_or(0.8);
+            let next_token = noddle_adapter_candle::tensor_io::sample_from_wire(
                 &noddle_core::tensor::Tensor::from_bytes(result.tensor_data),
+                temperature,
             )?;
 
             if Some(next_token) == eos_id {

@@ -82,10 +82,13 @@ message CancelAck {
 // ─── Client ↔ Node ────────────────────────────────────────────────────────────
 
 message PromptRequest {
-    string session_id   = 1;
-    string model_id     = 2;
-    string prompt_text  = 3;
-    bool   private_mode = 4;  // route only through high-reputation nodes
+    string session_id      = 1;
+    string model_id        = 2;
+    string prompt_text     = 3;
+    // claude: "high-reputation" might not be what people are expecting
+    // it might be that we support a private networks; we'll have to see
+    bool   private_mode    = 4;  // route only through high-reputation nodes
+    optional float temperature = 5;  // absent → default 0.8
 }
 
 message TokenChunk {
