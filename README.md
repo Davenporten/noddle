@@ -116,8 +116,9 @@ Options:
 noddle [OPTIONS] [PROMPT]
 
 Options:
-  -m, --model <MODEL_ID>      Model to use (default: meta-llama/Llama-3.2-3B-Instruct)
+  -m, --model <MODEL_ID>      Model to use (default: Qwen/Qwen2.5-7B-Instruct)
   -s, --session <SESSION_ID>  Resume a named session (conversation history is maintained)
+  -v, --verbose               Print token count to stderr as generation proceeds
 ```
 
 ### 5. Run the tests
