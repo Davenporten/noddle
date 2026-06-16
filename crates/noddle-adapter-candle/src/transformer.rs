@@ -97,18 +97,17 @@ impl Attention {
 
         let (q, k) = self.rotary.apply(&q, &k, seq_len)?;
 
-        // Expand KV heads to match Q heads if using grouped-query attention
-        let k = if self.num_kv_heads != self.num_heads {
-            let repeat = self.num_heads / self.num_kv_heads;
-            k.repeat((1, repeat, 1, 1))?
+        // Expand KV heads to match Q heads (grouped-query attention).
+        // Cat on the seq_len dim then reshape — equivalent to repeat_interleave on the head dim,
+        // so KV head i maps to Q heads [i*n_rep .. (i+1)*n_rep).
+        let (k, v) = if self.num_kv_heads != self.num_heads {
+            let n_rep = self.num_heads / self.num_kv_heads;
+            let (b, kv_h, t, d) = k.dims4()?;
+            let k = Tensor::cat(&vec![&k; n_rep], 2)?.reshape((b, kv_h * n_rep, t, d))?;
+            let v = Tensor::cat(&vec![&v; n_rep], 2)?.reshape((b, kv_h * n_rep, t, d))?;
+            (k, v)
         } else {
-            k
-        };
-        let v = if self.num_kv_heads != self.num_heads {
-            let repeat = self.num_heads / self.num_kv_heads;
-            v.repeat((1, repeat, 1, 1))?
-        } else {
-            v
+            (k, v)
         };
 
         let scale = (self.head_dim as f64).sqrt();
