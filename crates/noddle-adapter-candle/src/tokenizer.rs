@@ -142,26 +142,12 @@ fn build_bpe_tokenizer(content: &gguf_file::Content) -> Result<Tokenizer> {
     tokenizer.with_decoder(Some(ByteLevel::default()));
 
     // ── Special tokens ────────────────────────────────────────────────────────
-    // Read token types from GGUF: 0=normal, 1=unknown, 2=control, 3=user_defined,
-    // 4=unused, 5=byte. Register anything non-normal as a special token so the
-    // ByteLevel pre-tokenizer doesn't shred control tokens like <|start_header_id|>.
-    let token_types: Vec<u32> = match content.metadata.get("tokenizer.ggml.token_type") {
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .map(|v| match v {
-                Value::U32(n) => *n,
-                Value::I32(n) => *n as u32,
-                _ => 0,
-            })
-            .collect(),
-        _ => vec![],
-    };
-
+    // Register tokens matching <|...|> as special so the ByteLevel pre-tokenizer
+    // doesn't shred control tokens like <|start_header_id|> into character garbage.
     let special: Vec<tokenizers::AddedToken> = tokens
         .iter()
-        .enumerate()
-        .filter(|(i, _)| token_types.get(*i).copied().unwrap_or(0) != 0)
-        .map(|(_, tok)| tokenizers::AddedToken::from(tok.as_str(), true))
+        .filter(|tok| tok.starts_with("<|") && tok.ends_with("|>"))
+        .map(|tok| tokenizers::AddedToken::from(tok.as_str(), true))
         .collect();
 
     if !special.is_empty() {
