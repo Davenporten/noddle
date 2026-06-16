@@ -23,6 +23,8 @@ pub struct TransformerConfig {
     pub total_layers:  u32,
     pub rope_theta:    f32,
     pub vocab_size:    usize,
+    pub rope_dim:      usize,
+    pub rms_norm_eps:  f64,
 }
 
 impl TransformerConfig {
@@ -34,14 +36,14 @@ impl TransformerConfig {
 // ── Building blocks ────────────────────────────────────────────────────────
 
 struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+    sin: Tensor,  // [max_seq_len, rope_dim/2]
+    cos: Tensor,  // [max_seq_len, rope_dim/2]
 }
 
 impl RotaryEmbedding {
-    fn new(head_dim: usize, max_seq_len: usize, theta: f32, device: &Device) -> Result<Self> {
-        let theta_vec: Vec<f32> = (0..head_dim / 2)
-            .map(|i| 1.0 / theta.powf(2.0 * i as f32 / head_dim as f32))
+    fn new(rope_dim: usize, max_seq_len: usize, theta: f32, device: &Device) -> Result<Self> {
+        let theta_vec: Vec<f32> = (0..rope_dim / 2)
+            .map(|i| 1.0 / theta.powf(2.0 * i as f32 / rope_dim as f32))
             .collect();
         let theta_t = Tensor::new(theta_vec.as_slice(), device)?;
 
@@ -49,12 +51,8 @@ impl RotaryEmbedding {
         let pos_t = Tensor::new(positions.as_slice(), device)?.unsqueeze(1)?;
 
         let freqs = pos_t.broadcast_mul(&theta_t.unsqueeze(0)?)?;
-        // Duplicate to full head_dim so rotate_half can broadcast against
-        // the full [batch, heads, seq, head_dim] query/key tensors.
-        let cos_half = freqs.cos()?;
-        let sin_half = freqs.sin()?;
-        let cos = Tensor::cat(&[&cos_half, &cos_half], 1)?;
-        let sin = Tensor::cat(&[&sin_half, &sin_half], 1)?;
+        let cos = freqs.cos()?;
+        let sin = freqs.sin()?;
 
         Ok(Self { sin, cos })
     }
@@ -62,19 +60,12 @@ impl RotaryEmbedding {
     fn apply(&self, q: &Tensor, k: &Tensor, seq_len: usize) -> Result<(Tensor, Tensor)> {
         let cos = self.cos.narrow(0, 0, seq_len)?;
         let sin = self.sin.narrow(0, 0, seq_len)?;
-        Ok((rotate_half(q, &cos, &sin)?, rotate_half(k, &cos, &sin)?))
+        // rope_i requires contiguous input; transpose() breaks contiguity.
+        Ok((
+            candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?,
+            candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?,
+        ))
     }
-}
-
-fn rotate_half(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-    let (_, _, _, head_dim) = x.dims4()?;
-    let half = head_dim / 2;
-    let x1 = x.narrow(3, 0, half)?;
-    let x2 = x.narrow(3, half, half)?;
-    let rotated = Tensor::cat(&[&x2.neg()?, &x1], 3)?;
-    let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
-    let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
-    Ok((x.broadcast_mul(&cos)? + rotated.broadcast_mul(&sin)?)?)
 }
 
 // ── Attention ─────────────────────────────────────────────────────────────
@@ -263,10 +254,10 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
     // ── Transformer layers ─────────────────────────────────────────────────
     let mut layers = Vec::with_capacity(config.total_layers as usize);
     for i in 0..config.total_layers as usize {
-        let rotary = RotaryEmbedding::new(config.head_dim(), max_seq_len, config.rope_theta, device)?;
+        let rotary = RotaryEmbedding::new(config.rope_dim, max_seq_len, config.rope_theta, device)?;
 
-        let attn_norm = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.attn_norm.weight", i), device)?;
-        let ffn_norm  = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.ffn_norm.weight", i),  device)?;
+        let attn_norm = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.attn_norm.weight", i), device, config.rms_norm_eps)?;
+        let ffn_norm  = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.ffn_norm.weight", i),  device, config.rms_norm_eps)?;
 
         let attention = Attention {
             q: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.attn_q.weight", i),      device)?,
@@ -289,7 +280,7 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
     }
 
     // ── Final norm + LM head ───────────────────────────────────────────────
-    let final_norm = rms_norm_from_gguf(&content, &mut file, "output_norm.weight", device)?;
+    let final_norm = rms_norm_from_gguf(&content, &mut file, "output_norm.weight", device, config.rms_norm_eps)?;
     // Some models (e.g. Llama 3.2) use weight tying: the LM head is the same
     // tensor as the token embedding.  Fall back to token_embd.weight when a
     // dedicated output.weight is absent.
@@ -331,10 +322,24 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
         }
     };
 
+    let hidden_dim = get_u32("embedding_length")?;
+    let num_heads  = get_u32("attention.head_count")?;
+    let head_dim   = hidden_dim / num_heads;
+    let rope_dim   = get_u32("rope.dimension_count").unwrap_or(head_dim);
+
+    let rms_norm_eps = {
+        let key = format!("{}.attention.layer_norm_rms_epsilon", arch);
+        match content.metadata.get(key.as_str()) {
+            Some(Value::F32(v)) => *v as f64,
+            Some(Value::F64(v)) => *v,
+            _ => 1e-5f64,
+        }
+    };
+
     Ok(TransformerConfig {
-        hidden_dim:   get_u32("embedding_length")?,
-        num_heads:    get_u32("attention.head_count")?,
-        num_kv_heads: get_u32("attention.head_count_kv").unwrap_or_else(|_| get_u32("attention.head_count").unwrap()),
+        hidden_dim,
+        num_heads,
+        num_kv_heads: get_u32("attention.head_count_kv").unwrap_or(num_heads),
         ffn_dim:      get_u32("feed_forward_length")?,
         total_layers: get_u32("block_count")? as u32,
         rope_theta:   get_f32("rope.freq_base")?,
@@ -344,6 +349,8 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
                 _ => 32_000,
             }
         }),
+        rope_dim,
+        rms_norm_eps,
     })
 }
 
@@ -364,11 +371,12 @@ fn rms_norm_from_gguf(
     file:    &mut std::fs::File,
     name:    &str,
     device:  &Device,
+    eps:     f64,
 ) -> Result<RmsNorm> {
     let weight = content
         .tensor(file, name, device)
         .with_context(|| format!("loading GGUF tensor: {}", name))?
         .dequantize(device)?
         .to_dtype(DType::F32)?;
-    Ok(RmsNorm::new(weight, 1e-5))
+    Ok(RmsNorm::new(weight, eps))
 }
