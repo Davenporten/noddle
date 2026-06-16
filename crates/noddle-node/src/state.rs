@@ -198,12 +198,15 @@ impl NodeState {
 
         drop(backend); // release read lock before async dispatch
 
+        info!(context_tokens = context_tokens.len(), total_layers, eos_id = ?eos_id, "starting generation");
+
         // use lower max tokens for testing
         // const MAX_NEW_TOKENS: usize = 1;
         const MAX_NEW_TOKENS: usize = 256;
         let mut generated: Vec<u32> = Vec::with_capacity(MAX_NEW_TOKENS);
 
-        for _ in 0..MAX_NEW_TOKENS {
+        for step in 0..MAX_NEW_TOKENS {
+            info!(step, context_len = context_tokens.len(), "generation step");
             let job = JobMessage {
                 job_id:           uuid::Uuid::new_v4().to_string(),
                 model_id:         req.model_id.clone(),
@@ -229,14 +232,18 @@ impl NodeState {
                 temperature,
             )?;
 
-            if Some(next_token) == eos_id {
+            info!(next_token, eos_id = ?eos_id, "sampled token");
+            if step >= 5 && Some(next_token) == eos_id {
+                info!("hit EOS, stopping");
                 break;
             }
             generated.push(next_token);
             context_tokens.push(next_token);
         }
 
+        info!(generated_ids = ?generated, "detokenizing");
         let text = self.backend.read().await.detokenize(&generated)?;
+        info!(text = %text, "detokenized");
 
         if !req.session_id.is_empty() {
             self.sessions.record_turn(&req.session_id, req.prompt_text.clone(), text.clone());

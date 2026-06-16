@@ -46,8 +46,21 @@ async fn main() -> Result<()> {
     info!("noddle-node starting");
 
     // ── Config ────────────────────────────────────────────────────────────────
-    let config = config::Config::load()?;
+    let mut config = config::Config::load()?;
     info!(listen_addr = %config.node.listen_addr, "config loaded");
+
+    // --role <worker|admin|auto> overrides the config file value.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--role") {
+        if let Some(val) = args.get(pos + 1) {
+            config.node.role = match val.as_str() {
+                "worker" => config::RoleOverride::Worker,
+                "admin"  => config::RoleOverride::Admin,
+                _        => config::RoleOverride::Auto,
+            };
+            info!(role = %val, "role overridden via --role flag");
+        }
+    }
 
     // ── TLS ───────────────────────────────────────────────────────────────────
     let tls = tls::NodeTls::load_or_generate(&config::tls_dir())?;

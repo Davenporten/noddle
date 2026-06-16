@@ -326,6 +326,7 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
         let key = format!("{}.{}", arch, suffix);
         match content.metadata.get(key.as_str()) {
             Some(Value::F32(v)) => Ok(*v),
+            Some(Value::F64(v)) => Ok(*v as f32),
             _ => Ok(10_000.0), // default RoPE theta
         }
     };

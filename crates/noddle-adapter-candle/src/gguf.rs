@@ -102,11 +102,12 @@ impl InferenceAdapter for CandleAdapter {
     }
 
     fn tokenize(&self, prompt: &str) -> Result<Vec<u32>> {
-        self.model
-            .as_ref()
-            .context("no model loaded")?
-            .tokenizer
-            .encode(prompt)
+        let loaded = self.model.as_ref().context("no model loaded")?;
+        let ids = loaded.tokenizer.encode(prompt)?;
+        let roundtrip = loaded.tokenizer.decode_all(&ids)
+            .unwrap_or_else(|e| format!("<decode error: {}>", e));
+        tracing::debug!(token_count = ids.len(), ids = ?ids, roundtrip = %roundtrip, "tokenized prompt");
+        Ok(ids)
     }
 
     fn detokenize(&self, tokens: &[u32]) -> Result<String> {

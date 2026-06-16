@@ -60,6 +60,13 @@ impl ModelTokenizer {
             .map_err(|e| anyhow::anyhow!("{}", e))
             .context("decoding token ids")
     }
+
+    pub fn decode_all(&self, token_ids: &[u32]) -> Result<String> {
+        self.inner
+            .decode(token_ids, false)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("decoding token ids (include special)")
+    }
 }
 
 /// Build a tokenizer from vocabulary data embedded in a GGUF file.
@@ -135,26 +142,28 @@ fn build_bpe_tokenizer(content: &gguf_file::Content) -> Result<Tokenizer> {
     tokenizer.with_decoder(Some(ByteLevel::default()));
 
     // ── Special tokens ────────────────────────────────────────────────────────
-    let bos_id = match content.metadata.get("tokenizer.ggml.bos_token_id") {
-        Some(Value::U32(v)) => Some(*v),
-        _ => None,
-    };
-    let eos_id = match content.metadata.get("tokenizer.ggml.eos_token_id") {
-        Some(Value::U32(v)) => Some(*v),
-        _ => None,
+    // Read token types from GGUF: 0=normal, 1=unknown, 2=control, 3=user_defined,
+    // 4=unused, 5=byte. Register anything non-normal as a special token so the
+    // ByteLevel pre-tokenizer doesn't shred control tokens like <|start_header_id|>.
+    let token_types: Vec<u32> = match content.metadata.get("tokenizer.ggml.token_type") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .map(|v| match v {
+                Value::U32(n) => *n,
+                Value::I32(n) => *n as u32,
+                _ => 0,
+            })
+            .collect(),
+        _ => vec![],
     };
 
-    let mut special: Vec<tokenizers::AddedToken> = Vec::new();
-    if let Some(id) = bos_id {
-        if let Some(tok) = tokens.get(id as usize) {
-            special.push(tokenizers::AddedToken::from(tok.as_str(), true));
-        }
-    }
-    if let Some(id) = eos_id {
-        if let Some(tok) = tokens.get(id as usize) {
-            special.push(tokenizers::AddedToken::from(tok.as_str(), true));
-        }
-    }
+    let special: Vec<tokenizers::AddedToken> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| token_types.get(*i).copied().unwrap_or(0) != 0)
+        .map(|(_, tok)| tokenizers::AddedToken::from(tok.as_str(), true))
+        .collect();
+
     if !special.is_empty() {
         tokenizer.add_special_tokens(&special);
     }

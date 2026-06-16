@@ -33,18 +33,19 @@ async fn main() -> Result<()> {
 
     // A single-shot prompt was passed on the command line — run it and exit.
     if let Some(prompt) = cli_args.prompt {
-        send_and_stream(&mut client, &cli_args.model_id, &prompt, &cli_args.session_id).await?;
+        send_and_stream(&mut client, &cli_args.model_id, &prompt, &cli_args.session_id, cli_args.verbose).await?;
         return Ok(());
     }
 
     // No prompt given — enter interactive session loop.
-    run_session(&mut client, &cli_args.model_id, &cli_args.session_id).await
+    run_session(&mut client, &cli_args.model_id, &cli_args.session_id, cli_args.verbose).await
 }
 
 async fn run_session(
     client: &mut ClientServiceClient<tonic::transport::Channel>,
     model_id: &str,
     session_id: &str,
+    verbose: bool,
 ) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -74,7 +75,7 @@ async fn run_session(
             break;
         }
 
-        send_and_stream(client, model_id, prompt, session_id).await?;
+        send_and_stream(client, model_id, prompt, session_id, verbose).await?;
         println!();
     }
 
@@ -86,6 +87,7 @@ async fn send_and_stream(
     model_id: &str,
     prompt: &str,
     session_id: &str,
+    verbose: bool,
 ) -> Result<()> {
     let mut stream = client
         .submit_prompt(PromptRequest {
@@ -101,6 +103,7 @@ async fn send_and_stream(
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    let mut token_count = 0u32;
 
     loop {
         match stream.message().await {
@@ -108,9 +111,18 @@ async fn send_and_stream(
                 if !chunk.error.is_empty() {
                     bail!("node error: {}", chunk.error);
                 }
-                write!(out, "{}", chunk.text)?;
-                out.flush()?;
+                if !chunk.text.is_empty() {
+                    token_count += 1;
+                    if verbose {
+                        eprint!("\r[token {}]", token_count);
+                    }
+                    write!(out, "{}", chunk.text)?;
+                    out.flush()?;
+                }
                 if chunk.done {
+                    if verbose {
+                        eprintln!("\r[done — {} tokens]", token_count);
+                    }
                     break;
                 }
             }
@@ -127,6 +139,7 @@ async fn send_and_stream(
 struct CliArgs {
     model_id:   String,
     session_id: String,
+    verbose:    bool,
     /// If Some, run single-shot and exit. If None, enter interactive loop.
     prompt:     Option<String>,
 }
@@ -134,6 +147,7 @@ struct CliArgs {
 fn parse_args(args: &[String]) -> Result<CliArgs> {
     let mut model_id = "Qwen/Qwen2.5-7B-Instruct".to_string();
     let mut session_id = Uuid::new_v4().to_string();
+    let mut verbose = false;
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut i = 1;
 
@@ -146,6 +160,9 @@ fn parse_args(args: &[String]) -> Result<CliArgs> {
             "--session" | "-s" => {
                 i += 1;
                 session_id = args.get(i).context("--session requires a value")?.clone();
+            }
+            "--verbose" | "-v" => {
+                verbose = true;
             }
             arg if arg.starts_with('-') => {
                 bail!("unknown flag: {}", arg);
@@ -161,7 +178,7 @@ fn parse_args(args: &[String]) -> Result<CliArgs> {
         Some(prompt_parts.join(" "))
     };
 
-    Ok(CliArgs { model_id, session_id, prompt })
+    Ok(CliArgs { model_id, session_id, verbose, prompt })
 }
 
 // ── Connection ────────────────────────────────────────────────────────────────
