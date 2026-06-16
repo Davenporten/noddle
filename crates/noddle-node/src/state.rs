@@ -233,7 +233,7 @@ impl NodeState {
             )?;
 
             info!(next_token, eos_id = ?eos_id, "sampled token");
-            if step >= 5 && Some(next_token) == eos_id {
+            if Some(next_token) == eos_id {
                 info!("hit EOS, stopping");
                 break;
             }
