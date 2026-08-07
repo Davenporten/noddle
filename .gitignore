@@ -41,3 +41,6 @@ CLAUDE.md
 
 # Claude Code local settings
 .claude/
+
+**/examples/*
+!**/examples/.gitkeep
