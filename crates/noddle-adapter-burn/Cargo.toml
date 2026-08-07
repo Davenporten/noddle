@@ -1,0 +1,28 @@
+[package]
+name = "noddle-adapter-burn"
+version = "0.1.0"
+edition = "2024"
+
+# TODO: need all of these?
+[dependencies]
+noddle-core  = { workspace = true }
+noddle-weights = {workspace = true }
+anyhow       = { workspace = true }
+rand         = { workspace = true }
+tracing      = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+
+burn = { version = "0.21", features = ["rocm"] }
+burn-rocm = "0.21.0"
+
+candle-core = "0.10"
+
+gguf-rs = "0.1"
+
+# Tokenizer (loaded from tokenizer.json alongside the weight file)
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+
+# Tensor serialization
+safetensors = "0.3"
+

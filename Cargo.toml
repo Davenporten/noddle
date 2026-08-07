@@ -7,6 +7,7 @@ members = [
     "crates/noddle-adapter-candle",
     "crates/noddle-node",
     "crates/noddle-cli",
+    "crates/noddle-weights",
 ]
 resolver = "2"
 
@@ -47,3 +48,5 @@ noddle-core           = { path = "crates/noddle-core" }
 noddle-registry       = { path = "crates/noddle-registry" }
 noddle-router         = { path = "crates/noddle-router" }
 noddle-adapter-candle = { path = "crates/noddle-adapter-candle" }
+noddle-adapter-burn   = { path = "crates/noddle-adapter-burn" }
+noddle-weights        = { path = "crates/noddle-weights" }
