@@ -8,7 +8,7 @@
 /// Gemma, etc.) can be loaded here; they differ only in hyperparameters and
 /// weight names, both of which come from the GGUF file.
 use anyhow::{Context, Result};
-use candle_core::{quantized::QMatMul, DType, Device, Module, Tensor};
+use candle_core::{DType, Device, Module, Tensor, quantized::QMatMul};
 use candle_nn::RmsNorm;
 use std::ops::Range;
 
@@ -16,15 +16,15 @@ use std::ops::Range;
 
 #[derive(Debug, Clone)]
 pub struct TransformerConfig {
-    pub hidden_dim:    usize,
-    pub num_heads:     usize,
-    pub num_kv_heads:  usize,
-    pub ffn_dim:       usize,
-    pub total_layers:  u32,
-    pub rope_theta:    f32,
-    pub vocab_size:    usize,
-    pub rope_dim:      usize,
-    pub rms_norm_eps:  f64,
+    pub hidden_dim: usize,
+    pub num_heads: usize,
+    pub num_kv_heads: usize,
+    pub ffn_dim: usize,
+    pub total_layers: u32,
+    pub rope_theta: f32,
+    pub vocab_size: usize,
+    pub rope_dim: usize,
+    pub rms_norm_eps: f64,
 }
 
 impl TransformerConfig {
@@ -36,8 +36,8 @@ impl TransformerConfig {
 // ── Building blocks ────────────────────────────────────────────────────────
 
 struct RotaryEmbedding {
-    sin: Tensor,  // [max_seq_len, rope_dim/2]
-    cos: Tensor,  // [max_seq_len, rope_dim/2]
+    sin: Tensor, // [max_seq_len, rope_dim/2]
+    cos: Tensor, // [max_seq_len, rope_dim/2]
 }
 
 impl RotaryEmbedding {
@@ -75,23 +75,29 @@ struct Attention {
     k: QMatMul,
     v: QMatMul,
     o: QMatMul,
-    num_heads:    usize,
+    num_heads: usize,
     num_kv_heads: usize,
-    head_dim:     usize,
-    rotary:       RotaryEmbedding,
+    head_dim: usize,
+    rotary: RotaryEmbedding,
 }
 
 impl Attention {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (batch, seq_len, _) = x.dims3()?;
 
-        let q = self.q.forward(x)?
+        let q = self
+            .q
+            .forward(x)?
             .reshape((batch, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = self.k.forward(x)?
+        let k = self
+            .k
+            .forward(x)?
             .reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let v = self.v.forward(x)?
+        let v = self
+            .v
+            .forward(x)?
             .reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -118,9 +124,11 @@ impl Attention {
         let attn = attn.broadcast_add(&mask)?;
         let attn = candle_nn::ops::softmax(&attn, candle_core::D::Minus1)?;
 
-        let out = attn.matmul(&v)?
-            .transpose(1, 2)?
-            .reshape((batch, seq_len, self.num_heads * self.head_dim))?;
+        let out = attn.matmul(&v)?.transpose(1, 2)?.reshape((
+            batch,
+            seq_len,
+            self.num_heads * self.head_dim,
+        ))?;
 
         Ok(self.o.forward(&out)?)
     }
@@ -137,14 +145,14 @@ fn causal_mask(size: usize, device: &Device) -> Result<Tensor> {
 
 struct Mlp {
     gate: QMatMul,
-    up:   QMatMul,
+    up: QMatMul,
     down: QMatMul,
 }
 
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let gate = candle_nn::ops::silu(&self.gate.forward(x)?)?;
-        let up   = self.up.forward(x)?;
+        let up = self.up.forward(x)?;
         Ok(self.down.forward(&(gate * up)?)?)
     }
 }
@@ -154,8 +162,8 @@ impl Mlp {
 pub struct TransformerLayer {
     attn_norm: RmsNorm,
     attention: Attention,
-    ffn_norm:  RmsNorm,
-    mlp:       Mlp,
+    ffn_norm: RmsNorm,
+    mlp: Mlp,
 }
 
 impl TransformerLayer {
@@ -175,12 +183,12 @@ impl TransformerLayer {
 // ── Full model ────────────────────────────────────────────────────────────
 
 pub struct Transformer {
-    pub config:    TransformerConfig,
-    embedding:     candle_nn::Embedding,
-    pub layers:    Vec<TransformerLayer>,
-    final_norm:    RmsNorm,
-    lm_head:       QMatMul,
-    device:        Device,
+    pub config: TransformerConfig,
+    embedding: candle_nn::Embedding,
+    pub layers: Vec<TransformerLayer>,
+    final_norm: RmsNorm,
+    lm_head: QMatMul,
+    device: Device,
 }
 
 impl Transformer {
@@ -197,7 +205,7 @@ impl Transformer {
         token_ids: &[u32],
     ) -> Result<Tensor> {
         let is_first = layer_range.start == 0;
-        let is_last  = layer_range.end >= self.config.total_layers;
+        let is_last = layer_range.end >= self.config.total_layers;
 
         let mut hidden = if is_first {
             let ids = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
@@ -235,10 +243,9 @@ impl Transformer {
 pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transformer> {
     use candle_core::quantized::gguf_file;
 
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("opening GGUF file {:?}", path))?;
-    let content = gguf_file::Content::read(&mut file)
-        .context("reading GGUF content")?;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("opening GGUF file {:?}", path))?;
+    let content = gguf_file::Content::read(&mut file).context("reading GGUF content")?;
 
     let config = config_from_gguf(&content)?;
     let max_seq_len = 4096usize;
@@ -255,31 +262,89 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
     for i in 0..config.total_layers as usize {
         let rotary = RotaryEmbedding::new(config.rope_dim, max_seq_len, config.rope_theta, device)?;
 
-        let attn_norm = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.attn_norm.weight", i), device, config.rms_norm_eps)?;
-        let ffn_norm  = rms_norm_from_gguf(&content, &mut file, &format!("blk.{}.ffn_norm.weight", i),  device, config.rms_norm_eps)?;
+        let attn_norm = rms_norm_from_gguf(
+            &content,
+            &mut file,
+            &format!("blk.{}.attn_norm.weight", i),
+            device,
+            config.rms_norm_eps,
+        )?;
+        let ffn_norm = rms_norm_from_gguf(
+            &content,
+            &mut file,
+            &format!("blk.{}.ffn_norm.weight", i),
+            device,
+            config.rms_norm_eps,
+        )?;
 
         let attention = Attention {
-            q: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.attn_q.weight", i),      device)?,
-            k: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.attn_k.weight", i),      device)?,
-            v: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.attn_v.weight", i),      device)?,
-            o: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.attn_output.weight", i), device)?,
-            num_heads:    config.num_heads,
+            q: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.attn_q.weight", i),
+                device,
+            )?,
+            k: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.attn_k.weight", i),
+                device,
+            )?,
+            v: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.attn_v.weight", i),
+                device,
+            )?,
+            o: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.attn_output.weight", i),
+                device,
+            )?,
+            num_heads: config.num_heads,
             num_kv_heads: config.num_kv_heads,
-            head_dim:     config.head_dim(),
+            head_dim: config.head_dim(),
             rotary,
         };
 
         let mlp = Mlp {
-            gate: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.ffn_gate.weight", i), device)?,
-            up:   qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.ffn_up.weight", i),   device)?,
-            down: qmatmul_from_gguf(&content, &mut file, &format!("blk.{}.ffn_down.weight", i), device)?,
+            gate: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.ffn_gate.weight", i),
+                device,
+            )?,
+            up: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.ffn_up.weight", i),
+                device,
+            )?,
+            down: qmatmul_from_gguf(
+                &content,
+                &mut file,
+                &format!("blk.{}.ffn_down.weight", i),
+                device,
+            )?,
         };
 
-        layers.push(TransformerLayer { attn_norm, attention, ffn_norm, mlp });
+        layers.push(TransformerLayer {
+            attn_norm,
+            attention,
+            ffn_norm,
+            mlp,
+        });
     }
 
     // ── Final norm + LM head ───────────────────────────────────────────────
-    let final_norm = rms_norm_from_gguf(&content, &mut file, "output_norm.weight", device, config.rms_norm_eps)?;
+    let final_norm = rms_norm_from_gguf(
+        &content,
+        &mut file,
+        "output_norm.weight",
+        device,
+        config.rms_norm_eps,
+    )?;
     // Some models (e.g. Llama 3.2) use weight tying: the LM head is the same
     // tensor as the token embedding.  Fall back to token_embd.weight when a
     // dedicated output.weight is absent.
@@ -289,10 +354,19 @@ pub fn load_from_gguf(path: &std::path::Path, device: &Device) -> Result<Transfo
         qmatmul_from_gguf(&content, &mut file, "token_embd.weight", device)?
     };
 
-    Ok(Transformer { config, embedding, layers, final_norm, lm_head, device: device.clone() })
+    Ok(Transformer {
+        config,
+        embedding,
+        layers,
+        final_norm,
+        lm_head,
+        device: device.clone(),
+    })
 }
 
-fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Result<TransformerConfig> {
+fn config_from_gguf(
+    content: &candle_core::quantized::gguf_file::Content,
+) -> Result<TransformerConfig> {
     use candle_core::quantized::gguf_file::Value;
 
     // The metadata key prefix matches `general.architecture` (e.g. "llama", "mistral").
@@ -322,9 +396,9 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
     };
 
     let hidden_dim = get_u32("embedding_length")?;
-    let num_heads  = get_u32("attention.head_count")?;
-    let head_dim   = hidden_dim / num_heads;
-    let rope_dim   = get_u32("rope.dimension_count").unwrap_or(head_dim);
+    let num_heads = get_u32("attention.head_count")?;
+    let head_dim = hidden_dim / num_heads;
+    let rope_dim = get_u32("rope.dimension_count").unwrap_or(head_dim);
 
     let rms_norm_eps = {
         let key = format!("{}.attention.layer_norm_rms_epsilon", arch);
@@ -339,10 +413,10 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
         hidden_dim,
         num_heads,
         num_kv_heads: get_u32("attention.head_count_kv").unwrap_or(num_heads),
-        ffn_dim:      get_u32("feed_forward_length")?,
+        ffn_dim: get_u32("feed_forward_length")?,
         total_layers: get_u32("block_count")? as u32,
-        rope_theta:   get_f32("rope.freq_base")?,
-        vocab_size:   get_u32("vocab_size").unwrap_or_else(|_| {
+        rope_theta: get_f32("rope.freq_base")?,
+        vocab_size: get_u32("vocab_size").unwrap_or_else(|_| {
             match content.metadata.get("tokenizer.ggml.tokens") {
                 Some(Value::Array(arr)) => arr.len(),
                 _ => 32_000,
@@ -355,9 +429,9 @@ fn config_from_gguf(content: &candle_core::quantized::gguf_file::Content) -> Res
 
 fn qmatmul_from_gguf(
     content: &candle_core::quantized::gguf_file::Content,
-    file:    &mut std::fs::File,
-    name:    &str,
-    device:  &Device,
+    file: &mut std::fs::File,
+    name: &str,
+    device: &Device,
 ) -> Result<QMatMul> {
     let qtensor = content
         .tensor(file, name, device)
@@ -367,10 +441,10 @@ fn qmatmul_from_gguf(
 
 fn rms_norm_from_gguf(
     content: &candle_core::quantized::gguf_file::Content,
-    file:    &mut std::fs::File,
-    name:    &str,
-    device:  &Device,
-    eps:     f64,
+    file: &mut std::fs::File,
+    name: &str,
+    device: &Device,
+    eps: f64,
 ) -> Result<RmsNorm> {
     let weight = content
         .tensor(file, name, device)

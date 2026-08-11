@@ -1,11 +1,11 @@
 use crate::tensor_io;
-use crate::tokenizer::ModelTokenizer;
 use crate::transformer::{self, Transformer};
 use anyhow::{Context, Result};
 use candle_core::Device;
 use noddle_core::adapter::InferenceAdapter;
 use noddle_core::manifest::{ModelManifest, WeightFormat};
 use noddle_core::tensor::Tensor as WireTensor;
+use noddle_weights::tokenizer::ModelTokenizer;
 use std::ops::Range;
 use std::path::Path;
 use tracing::info;
@@ -15,14 +15,14 @@ use tracing::info;
 /// inference. Adding support for a new model architecture means implementing
 /// its forward pass in `transformer.rs`; no changes needed here.
 pub struct CandleAdapter {
-    model:     Option<LoadedModel>,
-    device:    Device,
+    model: Option<LoadedModel>,
+    device: Device,
 }
 
 struct LoadedModel {
-    model_id:     String,
-    transformer:  Transformer,
-    tokenizer:    ModelTokenizer,
+    model_id: String,
+    transformer: Transformer,
+    tokenizer: ModelTokenizer,
     eos_token_id: Option<u32>,
 }
 
@@ -31,7 +31,10 @@ impl CandleAdapter {
         // Use Metal on macOS, CUDA if available, otherwise CPU
         let device = Self::best_device();
         info!(device = ?device, "candle adapter initialised");
-        Self { model: None, device }
+        Self {
+            model: None,
+            device,
+        }
     }
 
     fn best_device() -> Device {
@@ -64,8 +67,7 @@ impl InferenceAdapter for CandleAdapter {
         let transformer = transformer::load_from_gguf(weight_path, &self.device)
             .context("loading transformer from GGUF")?;
 
-        let tokenizer = ModelTokenizer::load(weight_path)
-            .context("loading tokenizer")?;
+        let tokenizer = ModelTokenizer::load(weight_path).context("loading tokenizer")?;
 
         // Read EOS token ID from the GGUF metadata if present.
         let eos_token_id = {
@@ -98,13 +100,18 @@ impl InferenceAdapter for CandleAdapter {
     }
 
     fn total_layers(&self) -> u32 {
-        self.model.as_ref().map(|m| m.transformer.config.total_layers).unwrap_or(0)
+        self.model
+            .as_ref()
+            .map(|m| m.transformer.config.total_layers)
+            .unwrap_or(0)
     }
 
     fn tokenize(&self, prompt: &str) -> Result<Vec<u32>> {
         let loaded = self.model.as_ref().context("no model loaded")?;
         let ids = loaded.tokenizer.encode(prompt)?;
-        let roundtrip = loaded.tokenizer.decode_all(&ids)
+        let roundtrip = loaded
+            .tokenizer
+            .decode_all(&ids)
             .unwrap_or_else(|e| format!("<decode error: {}>", e));
         tracing::debug!(token_count = ids.len(), ids = ?ids, roundtrip = %roundtrip, "tokenized prompt");
         Ok(ids)
