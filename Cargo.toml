@@ -5,6 +5,7 @@ members = [
     "crates/noddle-registry",
     "crates/noddle-router",
     "crates/noddle-adapter-candle",
+    "crates/noddle-adapter-burn",
     "crates/noddle-node",
     "crates/noddle-cli",
     "crates/noddle-weights",
