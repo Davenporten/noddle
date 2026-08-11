@@ -18,3 +18,5 @@ gguf-rs = "0.1"
 
 # Tokenizer (loaded from tokenizer.json alongside the weight file)
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

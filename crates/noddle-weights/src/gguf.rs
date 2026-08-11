@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
-use gguf_rs::{get_gguf_container, GGUFModel};
+use anyhow::{Result, anyhow};
+use gguf_rs::{GGUFModel, get_gguf_container};
 use noddle_core::manifest::ModelManifest;
 use std::path::Path;
 use tracing::info;
